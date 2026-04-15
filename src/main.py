@@ -5,6 +5,7 @@ Loads configuration and launches the game engine.
 
 import sys
 import os
+import argparse
 
 # Add src to Python path so modules can be imported
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -30,7 +31,14 @@ def load_config(config_path: str = None) -> dict:
 
 def main():
     """Application entry point."""
+    parser = argparse.ArgumentParser(description="Let's Dance!")
+    parser.add_argument("--model", "-m", choices=["movenet", "mediapipe"],
+                        default="mediapipe",
+                        help="포즈 추출 모델 선택 (기본: mediapipe)")
+    args = parser.parse_args()
+
     config = load_config()
+    config["pose_backend"] = args.model
     engine = GameEngine(config)
 
     try:
