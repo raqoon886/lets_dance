@@ -1,0 +1,12 @@
+{
+  "id": "beginner_wave",
+  "title": "웨이브 기초",
+  "artist": "Let's Dance",
+  "duration": 60,
+  "bpm": 100,
+  "difficulty": 1,
+  "mode": [
+    "practice",
+    "challenge"
+  ]
+}
