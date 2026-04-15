@@ -9,15 +9,43 @@ import time
 import numpy as np
 import threading
 import sys
+import termios
+import tty
 
-# 터미널에서 'q' 입력 감지용
-_stop_flag = False
-def _stdin_listener():
-    global _stop_flag
-    for line in sys.stdin:
-        if line.strip().lower() == 'q':
-            _stop_flag = True
-            break
+class KeyboardReader:
+    def __init__(self):
+        self._key_buffer = []
+        self._lock = threading.Lock()
+        self._running = True
+        self._old_settings = None
+        self._thread = threading.Thread(target=self._reader_loop, daemon=True)
+
+    def start(self):
+        self._old_settings = termios.tcgetattr(sys.stdin)
+        tty.setcbreak(sys.stdin.fileno())
+        self._thread.start()
+
+    def stop(self):
+        self._running = False
+        if self._old_settings:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old_settings)
+
+    def _reader_loop(self):
+        while self._running:
+            try:
+                ch = sys.stdin.read(1)
+                if not ch:
+                    continue
+                with self._lock:
+                    self._key_buffer.append(ch)
+            except Exception:
+                break
+
+    def get_key(self):
+        with self._lock:
+            if self._key_buffer:
+                return self._key_buffer.pop(0)
+        return None
 
 def test_mediapipe_pose(duration=None):
     """
@@ -50,12 +78,10 @@ def test_mediapipe_pose(duration=None):
     detection_count = 0
     
     print("테스트: 무제한")
-    print("종료: 터미널에 q 입력 또는 화면 창에서 ESC 키\n")
+    print("종료: 터미널에서 q 키\n")
     
-    global _stop_flag
-    _stop_flag = False
-    listener = threading.Thread(target=_stdin_listener, daemon=True)
-    listener.start()
+    kb = KeyboardReader()
+    kb.start()
     
     start_time = time.time()
     frame_count = 0
@@ -112,9 +138,10 @@ def test_mediapipe_pose(duration=None):
             # 윈도우에 표시
             cv2.imshow("MediaPipe Pose Test", frame)
             
-            # 터미널 q 입력 또는 화면 ESC 키로 종료
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q') or key == 27 or _stop_flag:
+            # 터미널 q 키로 종료
+            key_ch = kb.get_key()
+            cv2.waitKey(1)
+            if key_ch == 'q':
                 break
             
             if frame_count % 30 == 0:
@@ -122,6 +149,7 @@ def test_mediapipe_pose(duration=None):
                       f"({100*detection_count/frame_count:.1f}%)")
     
     finally:
+        kb.stop()
         cap.release()
         cv2.destroyAllWindows()
         pose.close()
@@ -174,7 +202,7 @@ if __name__ == "__main__":
     print("\n설명:")
     print("- 웹캠에서 실시간으로 Pose Detection 수행")
     print("- 스켈레톤 포인트가 화면에 표시됩니다")
-    print("- 종료: 터미널에 q 입력 또는 화면 창에서 ESC 키\n")
+    print("- 종료: 터미널에서 q 키\n")
     
     try:
         test_mediapipe_pose()
