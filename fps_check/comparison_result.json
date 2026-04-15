@@ -1,0 +1,23 @@
+{
+  "video": "/home/willtek/work/lets_dance/fps_check/recorded.avi",
+  "total_frames": 760,
+  "mediapipe": {
+    "detection_rate": 71.71052631578947,
+    "fps": 18.08691667135341,
+    "avg_inference_ms": 55.28858335394608,
+    "jitter_mean": 0.013810266442071725,
+    "jitter_std": 0.020396550692945915,
+    "angle_mean": 159.26074739415904,
+    "angle_std": 37.71542108447054
+  },
+  "movenet": {
+    "detection_rate": 68.28947368421052,
+    "fps": 20.85698441893145,
+    "avg_inference_ms": 47.94556969090512,
+    "jitter_mean": 0.011319700628519058,
+    "jitter_std": 0.007896100170910358,
+    "angle_mean": 161.85189217706503,
+    "angle_std": 37.14369420189707
+  },
+  "winner": "MoveNet"
+}
