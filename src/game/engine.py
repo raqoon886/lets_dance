@@ -132,33 +132,66 @@ class GameEngine:
 
     @staticmethod
     def _load_fonts(pygame):
-        """한국어 지원 폰트를 로드합니다. 파일 경로 → SysFont 순으로 fallback."""
+        """한국어 지원 폰트를 로드합니다.
+        우선순위: ① 프로젝트 번들 폰트 → ② 시스템 경로 → ③ SysFont fallback
+        번들 폰트(assets/fonts/NotoSansKR.ttf)를 git에 포함시켜
+        어떤 OS/환경에서도 한글이 깨지지 않도록 합니다.
+        """
         import os
 
-        # 우선순위 폰트 파일 목록 (라즈베리파이 Noto CJK 경로)
-        candidates = [
+        # ① 프로젝트 번들 폰트 (engine.py → src/game → src → project/assets/fonts)
+        try:
+            engine_dir   = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(os.path.dirname(engine_dir))
+            bundle_font  = os.path.join(project_root, "assets", "fonts", "NotoSansKR.ttf")
+        except Exception:
+            bundle_font = ""
+
+        # ② 시스템 경로 후보 (라즈베리파이 / 우분투 / macOS / Windows)
+        system_candidates = [
+            # Linux (Raspberry Pi, Ubuntu)
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/opentype/noto/NotoSansCJKkr-Regular.otf",
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+            # macOS
+            "/Library/Fonts/NotoSansKR-Regular.otf",
+            "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+            # Windows
+            "C:/Windows/Fonts/malgun.ttf",       # 맑은 고딕
+            "C:/Windows/Fonts/gulim.ttc",         # 굴림
         ]
+
         font_path = None
-        for p in candidates:
-            if os.path.exists(p):
-                font_path = p
-                break
+        # 번들 폰트 우선
+        if os.path.exists(bundle_font):
+            font_path = bundle_font
+            print(f"[FONT] 번들 폰트 사용: {bundle_font}")
+        else:
+            for p in system_candidates:
+                if os.path.exists(p):
+                    font_path = p
+                    print(f"[FONT] 시스템 폰트 사용: {p}")
+                    break
+
+        if font_path is None:
+            print("[FONT] 한글 폰트를 찾지 못했습니다. 한글이 깨질 수 있습니다.")
 
         def make(size, bold=False):
             if font_path:
                 try:
                     return pygame.font.Font(font_path, size)
+                except Exception as e:
+                    print(f"[FONT] 폰트 로드 실패 ({font_path}): {e}")
+            # ③ SysFont fallback
+            for name in ["notosanscjkkr", "notosanscjk", "malgun gothic",
+                         "applegothic", "nanum gothic", "sans"]:
+                try:
+                    f = pygame.font.SysFont(name, size, bold=bold)
+                    if f:
+                        return f
                 except Exception:
                     pass
-            # SysFont fallback
-            for name in ["notosanscjkkr", "notosanscjkjp", "notosanscjksc", "sans"]:
-                f = pygame.font.SysFont(name, size, bold=bold)
-                if f:
-                    return f
             return pygame.font.SysFont(None, size)
 
         return {
