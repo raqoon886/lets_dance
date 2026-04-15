@@ -2,6 +2,16 @@
 
 라즈베리 파이에서 동작하는 온디바이스 AI 댄스 게임입니다. 웹캠으로 MediaPipe를 통해 자세를 감지하고, 시공간 그래프 합성곱 신경망(ST-GCN)으로 동작 임베딩을 추출하여 댄스 유사도를 실시간으로 채점합니다.
 
+## 실행 방법
+```bash
+python src/main.py -S angle -s direct
+```
+옵션 설명
+
+-S: direct compare 방식 설정인데, angle 기반이어서 저렇게 들어갔어요 (euclidian, cosine등 가능)
+
+-s : 나중에 AI 모델로 비교하는거 들어오면 -s "모델명" 이런식으로 들어갈 예정이고 지금은 direct_compare의 준말
+
 ## 아키텍처 개요
 
 ```
