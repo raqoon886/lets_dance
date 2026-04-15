@@ -54,17 +54,34 @@ class SimilarityCalculator:
     @staticmethod
     def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
         """Cosine similarity between two vectors."""
-        # TODO: np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-        return 0.0
+        norm_a = np.linalg.norm(a)
+        norm_b = np.linalg.norm(b)
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return float(np.dot(a, b) / (norm_a * norm_b))
 
     @staticmethod
     def _euclidean_similarity(a: np.ndarray, b: np.ndarray) -> float:
         """Convert Euclidean distance to similarity score."""
-        # TODO: 1 / (1 + np.linalg.norm(a - b))
-        return 0.0
+        return float(1.0 / (1.0 + np.linalg.norm(a - b)))
 
     @staticmethod
     def _dtw_similarity(a: np.ndarray, b: np.ndarray) -> float:
-        """Dynamic Time Warping based similarity."""
-        # TODO: Use scipy or fastdtw for DTW computation
-        return 0.0
+        """Dynamic Time Warping based similarity (simplified for 1D vectors)."""
+        try:
+            from scipy.spatial.distance import euclidean
+            n, m = len(a), len(b)
+            dtw_matrix = np.full((n + 1, m + 1), np.inf)
+            dtw_matrix[0, 0] = 0.0
+            for i in range(1, n + 1):
+                for j in range(1, m + 1):
+                    cost = abs(float(a[i - 1]) - float(b[j - 1]))
+                    dtw_matrix[i, j] = cost + min(
+                        dtw_matrix[i - 1, j],
+                        dtw_matrix[i, j - 1],
+                        dtw_matrix[i - 1, j - 1],
+                    )
+            distance = dtw_matrix[n, m]
+            return float(1.0 / (1.0 + distance))
+        except ImportError:
+            return 0.0

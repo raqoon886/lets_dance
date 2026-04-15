@@ -38,17 +38,32 @@ class EmbeddingExtractor:
                 - "embedding": embedding vector if sequence complete, else None
                 - "detected": whether pose was detected
         """
-        # TODO:
-        # 1. Detect pose
-        # 2. Normalize landmarks
-        # 3. Smooth landmarks
-        # 4. Append to buffer
-        # 5. If buffer full, build sequence graph and extract embedding
         result = {
             "landmarks": None,
             "embedding": None,
             "detected": False,
         }
+
+        # 1. Detect pose
+        detection = self.pose_detector.detect(frame)
+        result["detected"] = detection["detected"]
+
+        if not detection["detected"]:
+            return result
+
+        # 2. Normalize landmarks
+        normalized = self.landmark_processor.normalize(detection["landmarks"])
+        result["landmarks"] = normalized
+
+        # 3. Append to buffer and smooth
+        self._landmark_buffer.append(normalized)
+        if len(self._landmark_buffer) > self.sequence_length:
+            self._landmark_buffer = self._landmark_buffer[-self.sequence_length:]
+
+        # 4. If buffer full, build sequence graph and extract embedding
+        if len(self._landmark_buffer) >= self.sequence_length:
+            result["embedding"] = self.extract_from_sequence(self._landmark_buffer)
+
         return result
 
     def extract_from_sequence(self, landmark_sequence: list) -> np.ndarray:
