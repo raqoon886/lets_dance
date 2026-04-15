@@ -103,8 +103,122 @@ class PoseSimilarity:
             return 0.0
 
         similarity = np.dot(vec_a, vec_b) / (norm_a * norm_b)
-        # -1~1 범위를 0~1로 매핑
-        return float(np.clip((similarity + 1) / 2, 0.0, 1.0))
+        return float(np.clip(similarity, 0.0, 1.0))
+
+    def euclidean_similarity(self, pose_a: np.ndarray, pose_b: np.ndarray) -> float:
+        """
+        두 포즈 간 관절별 유클리드 거리 기반 유사도
+
+        Args:
+            pose_a: (33, 4) landmarks
+            pose_b: (33, 4) landmarks
+
+        Returns:
+            유사도 (0.0 ~ 1.0)
+        """
+        if self.use_key_joints_only:
+            coords_a = pose_a[self.KEY_JOINTS, :2].copy()
+            coords_b = pose_b[self.KEY_JOINTS, :2].copy()
+        else:
+            coords_a = pose_a[:, :2].copy()
+            coords_b = pose_b[:, :2].copy()
+
+        if self.normalize:
+            coords_a = self._normalize_pose(coords_a)
+            coords_b = self._normalize_pose(coords_b)
+
+        per_joint_dist = np.linalg.norm(coords_a - coords_b, axis=1)
+        mean_dist = np.mean(per_joint_dist)
+        return float(np.exp(-2.0 * mean_dist))
+
+    def hybrid_similarity(self, pose_a: np.ndarray, pose_b: np.ndarray,
+                          cosine_weight=0.3, euclidean_weight=0.7) -> float:
+        """
+        코사인 + 유클리드 혼합 유사도
+
+        Args:
+            pose_a: (33, 4) landmarks
+            pose_b: (33, 4) landmarks
+            cosine_weight: 코사인 비중 (기본 0.3)
+            euclidean_weight: 유클리드 비중 (기본 0.7)
+
+        Returns:
+            유사도 (0.0 ~ 1.0)
+        """
+        cos_sim = self.cosine_similarity(pose_a, pose_b)
+        euc_sim = self.euclidean_similarity(pose_a, pose_b)
+        return float(np.clip(
+            cosine_weight * cos_sim + euclidean_weight * euc_sim, 0.0, 1.0))
+
+    # ── 관절 각도(Angle) 기반 유사도 ──
+
+    # 각도를 계측할 관절 triplet: (A, B, C) → B 지점에서의 A→B→C 사이 각도
+    # MediaPipe 33 keypoint 기준 인덱스
+    ANGLE_JOINTS = [
+        # 어깨: 골반 → 어깨 → 팔꿈치 (팔을 얼마나 올렸는지)
+        (23, 11, 13),   # 왼쪽 어깨
+        (24, 12, 14),   # 오른쪽 어깨
+        # 팔꿈치: 어깨 → 팔꿈치 → 손목 (팔 굽힘)
+        (11, 13, 15),   # 왼쪽 팔꿈치
+        (12, 14, 16),   # 오른쪽 팔꿈치
+        # 골반: 어깨 → 골반 → 무릎 (다리 들기)
+        (11, 23, 25),   # 왼쪽 골반
+        (12, 24, 26),   # 오른쪽 골반
+        # 무릎: 골반 → 무릎 → 발목 (무릎 굽힘)
+        (23, 25, 27),   # 왼쪽 무릎
+        (24, 26, 28),   # 오른쪽 무릎
+    ]
+
+    @staticmethod
+    def _calc_angle(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
+        """
+        세 점 A, B, C에서 B 지점의 각도(라디안)를 계산.
+        BA 벡터와 BC 벡터 사이의 각도.
+        """
+        ba = a - b
+        bc = c - b
+        cos_val = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-8)
+        return float(np.arccos(np.clip(cos_val, -1.0, 1.0)))
+
+    def _extract_angles(self, landmarks: np.ndarray) -> np.ndarray:
+        """
+        포즈에서 8개 관절 각도를 추출.
+
+        Args:
+            landmarks: (33, 4) [x, y, z, visibility]
+
+        Returns:
+            (8,) 각도 배열 (라디안, 0~π)
+        """
+        coords = landmarks[:, :2]  # x, y만 사용
+        angles = np.array([
+            self._calc_angle(coords[a], coords[b], coords[c])
+            for a, b, c in self.ANGLE_JOINTS
+        ])
+        return angles
+
+    def angle_similarity(self, pose_a: np.ndarray, pose_b: np.ndarray) -> float:
+        """
+        관절 각도 기반 유사도. 각 관절의 각도 차이 평균으로 계산.
+        위치/크기에 완전히 독립적.
+
+        Args:
+            pose_a: (33, 4) landmarks
+            pose_b: (33, 4) landmarks
+
+        Returns:
+            유사도 (0.0 ~ 1.0)
+        """
+        angles_a = self._extract_angles(pose_a)
+        angles_b = self._extract_angles(pose_b)
+
+        # 각도 차이 (라디안). 최대 π (180도)
+        diff = np.abs(angles_a - angles_b)
+        mean_diff = np.mean(diff)
+
+        # π → 0.0, 0 → 1.0 으로 선형 매핑
+        similarity = 1.0 - (mean_diff / np.pi)
+        return float(np.clip(similarity, 0.0, 1.0))
 
     def compare_sequence(self, seq_a: list, seq_b: list) -> list:
         """

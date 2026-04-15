@@ -57,6 +57,7 @@ class GameEngine:
         # 가이드 캐릭터용 참조 랜드마크
         self._ref_landmarks = None          # shape (N, 33, 4)
         self._ref_frame_landmarks = None    # shape (33, 4) — 현재 프레임
+        self._ref_current_idx = 0           # 현재 참조 프레임 인덱스
         # 레퍼런스 영상 (mp4)
         self._ref_video_cap = None          # cv2.VideoCapture
         self._ref_video_fps: float = 30.0
@@ -116,6 +117,24 @@ class GameEngine:
                if k in ("score_scale", "combo_multiplier", "grade_thresholds")}
         )
         self._feedback_gen = FeedbackGenerator()
+
+        # Pose similarity comparator
+        self._score_method = self.config.get("score_method", "direct")
+        if self._score_method == "direct":
+            from direct_compare.pose_similarity import PoseSimilarity
+            self._pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)
+            self._similarity_method = self.config.get("similarity_method", "cosine")
+            self._tolerance_delay = self.config.get("tolerance_delay", 1.0)
+            self._embedding_extractor = None
+            print(f"[INFO] Score method: direct ({self._similarity_method} similarity, tolerance {self._tolerance_delay}s)")
+        else:
+            # embedding 모드: ST-GCN 임베딩 + SimilarityCalculator
+            from scoring.similarity import SimilarityCalculator
+            self._similarity_calc = SimilarityCalculator(metric="sliding_window", window_size=15)
+            self._pose_comparator = None
+            # TODO: EmbeddingExtractor 초기화 (모델 학습 완료 후)
+            self._embedding_extractor = None
+            print(f"[INFO] Score method: embedding (ST-GCN + sliding window cosine)")
 
         # ── 폰트 로드 (한국어 지원: NotoSansCJK → fallback SysFont) ──
         self._fonts = self._load_fonts(pygame)
@@ -394,11 +413,20 @@ class GameEngine:
         """Update game state based on current state."""
         if self.state == GameState.COUNTDOWN:
             elapsed = time.time() - self._countdown_start
-            remaining = 3 - int(elapsed)
+            remaining = 10 - int(elapsed)
             if remaining < 0:
                 self.transition_to(GameState.PLAYING)
             else:
                 self._countdown_timer = remaining
+
+            # 카운트다운 중 카메라+포즈 워밍업 (렉 방지)
+            import cv2
+            if self._camera is not None:
+                ret, frame = self._camera.read()
+                if ret:
+                    frame = cv2.flip(frame, 1)
+                    self._current_frame = frame
+                    self._pose_detector.detect(frame)  # 모델 워밍업
 
         elif self.state == GameState.PLAYING:
             self._update_gameplay()
@@ -433,6 +461,7 @@ class GameEngine:
                 len(self._ref_landmarks) - 1,
             )
             self._ref_frame_landmarks = self._ref_landmarks[fi]
+            self._ref_current_idx = fi
 
         # 레퍼런스 영상 프레임 동기화 (영상 fps 기준)
         if self._ref_video_cap is not None and self._current_session:
@@ -470,13 +499,59 @@ class GameEngine:
                 self._ref_video_frame = None
                 self._ref_video_surf = None
 
-        # Score based on pose detection (simulated reference matching)
+        # Score based on pose similarity
         if self._pose_detected:
-            # In a full implementation, compare with reference.
-            # For demo: score based on detection confidence (mean visibility)
-            visibility = self._current_landmarks[:, 3]
-            mean_vis = float(np.mean(visibility[visibility > 0]))
-            sim = min(mean_vis, 1.0)
+            if self._ref_frame_landmarks is not None:
+                if self._score_method == "direct":
+                    # direct: 반응 딜레이 윈도우 내 최대 유사도
+                    tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
+                    start_idx = max(0, self._ref_current_idx - tolerance_frames)
+                    end_idx = self._ref_current_idx + 1  # 현재 프레임 포함
+
+                    best_sim = 0.0
+                    for ri in range(start_idx, end_idx):
+                        ref_lm = self._ref_landmarks[ri]
+                        if self._similarity_method == "euclidean":
+                            s = self._pose_comparator.euclidean_similarity(
+                                self._current_landmarks, ref_lm)
+                        elif self._similarity_method == "hybrid":
+                            s = self._pose_comparator.hybrid_similarity(
+                                self._current_landmarks, ref_lm)
+                        elif self._similarity_method == "angle":
+                            s = self._pose_comparator.angle_similarity(
+                                self._current_landmarks, ref_lm)
+                        else:
+                            s = self._pose_comparator.cosine_similarity(
+                                self._current_landmarks, ref_lm)
+                        if s > best_sim:
+                            best_sim = s
+                    sim = best_sim
+
+                    # 디버그: 현재 프레임과만 비교한 값 vs 윈도우 최대값
+                    if self._similarity_method == "angle":
+                        sim_now = self._pose_comparator.angle_similarity(
+                            self._current_landmarks, self._ref_frame_landmarks)
+                    elif self._similarity_method == "euclidean":
+                        sim_now = self._pose_comparator.euclidean_similarity(
+                            self._current_landmarks, self._ref_frame_landmarks)
+                    elif self._similarity_method == "hybrid":
+                        sim_now = self._pose_comparator.hybrid_similarity(
+                            self._current_landmarks, self._ref_frame_landmarks)
+                    else:
+                        sim_now = self._pose_comparator.cosine_similarity(
+                            self._current_landmarks, self._ref_frame_landmarks)
+                    print(f"\r[DBG] now={sim_now:.3f} best={sim:.3f} win={end_idx-start_idx}f idx={self._ref_current_idx}", end="")
+                else:
+                    # embedding: ST-GCN 임베딩 비교 (TODO: 구현 후 연결)
+                    # 현재는 fallback으로 detection confidence 사용
+                    visibility = self._current_landmarks[:, 3]
+                    mean_vis = float(np.mean(visibility[visibility > 0]))
+                    sim = min(mean_vis, 1.0)
+            else:
+                # 레퍼런스 없으면 detection confidence로 대체
+                visibility = self._current_landmarks[:, 3]
+                mean_vis = float(np.mean(visibility[visibility > 0]))
+                sim = min(mean_vis, 1.0)
             evaluation = self._scorer.evaluate(sim)
             fb = self._feedback_gen.generate(evaluation)
             if fb:
@@ -1291,7 +1366,7 @@ class GameEngine:
             self._selected_song_idx = 0
         elif state == GameState.COUNTDOWN:
             self._countdown_start = time.time()
-            self._countdown_timer = 3
+            self._countdown_timer = 10  # 10초 카운트다운 (워밍업 시간 확보)
         elif state == GameState.PLAYING:
             # PAUSED→PLAYING 복귀인 경우에만 세션 유지
             resuming_from_pause = getattr(self, '_prev_state', None) == GameState.PAUSED
@@ -1320,7 +1395,12 @@ class GameEngine:
                     import cv2 as _cv2
                     ref_path = os.path.join(self._current_song["path"], "reference.npy")
                     try:
-                        self._ref_landmarks = np.load(ref_path)  # (N, 33, 4)
+                        ref_data = np.load(ref_path)
+                        # (N, 33, 3) → (N, 33, 4): visibility 채널 추가
+                        if ref_data.ndim == 3 and ref_data.shape[2] == 3:
+                            vis = np.ones((*ref_data.shape[:2], 1), dtype=np.float32)
+                            ref_data = np.concatenate([ref_data, vis], axis=2)
+                        self._ref_landmarks = ref_data.astype(np.float32)
                         print(f"[INFO] 참조 랜드마크 로드: {self._ref_landmarks.shape}")
                     except Exception as e:
                         print(f"[WARN] 참조 랜드마크 로드 실패: {e}")
