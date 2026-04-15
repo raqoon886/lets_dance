@@ -88,7 +88,9 @@ class GameEngine:
         # Pose detector
         from pose.detector import PoseDetector
         pose_cfg = self.config.get("pose", {})
+        backend = self.config.get("pose_backend", "mediapipe")
         self._pose_detector = PoseDetector(
+            backend=backend,
             model_complexity=pose_cfg.get("model_complexity", 1),
             min_detection_confidence=pose_cfg.get("min_detection_confidence", 0.5),
             min_tracking_confidence=pose_cfg.get("min_tracking_confidence", 0.5),
