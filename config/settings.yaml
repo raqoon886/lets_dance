@@ -19,6 +19,16 @@ embedding:
   graph_hidden_dim: 64
   num_graph_layers: 3
 
+scratch:
+  model_dir: "data/models/scratch"
+  model_name: "gcn_e64"
+  model_path: ""              # optional direct .tflite path; empty uses registry/model_name
+  sequence_length: 30
+  feature_dims: 2             # 2=xy, 3=xyz, 4=xyz+visibility
+  input_layout: "BTJC"        # BTJC=[1,T,J,C], BJTC=[1,J,T,C], BTC=[1,T,J*C]
+  top_k: 3
+  candidate_stride: 3
+
 scoring:
   similarity_metric: "cosine"  # cosine, euclidean, dtw
   score_scale: 100
