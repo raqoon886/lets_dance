@@ -17,14 +17,17 @@ class PoseDetector:
 
     def initialize(self):
         """Initialize MediaPipe Pose model."""
-        # TODO: Initialize mp.solutions.pose.Pose with config params
-        # import mediapipe as mp
-        # self._pose = mp.solutions.pose.Pose(
-        #     model_complexity=self.model_complexity,
-        #     min_detection_confidence=self.min_detection_confidence,
-        #     min_tracking_confidence=self.min_tracking_confidence,
-        # )
-        pass
+        try:
+            import mediapipe as mp
+            self._pose = mp.solutions.pose.Pose(
+                static_image_mode=False,
+                model_complexity=self.model_complexity,
+                min_detection_confidence=self.min_detection_confidence,
+                min_tracking_confidence=self.min_tracking_confidence,
+            )
+        except ImportError:
+            print("[WARN] mediapipe not installed, using dummy detector")
+            self._pose = None
 
     def detect(self, frame: np.ndarray) -> dict:
         """
@@ -38,10 +41,21 @@ class PoseDetector:
                 - "landmarks": np.ndarray of shape (33, 4) [x, y, z, visibility]
                 - "detected": bool indicating if pose was found
         """
-        # TODO: Convert BGR -> RGB, run self._pose.process(), extract landmarks
+        landmarks = np.zeros((33, 4), dtype=np.float32)
+        detected = False
+
+        if self._pose is not None:
+            import cv2
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = self._pose.process(rgb)
+            if results.pose_landmarks:
+                detected = True
+                for i, lm in enumerate(results.pose_landmarks.landmark):
+                    landmarks[i] = [lm.x, lm.y, lm.z, lm.visibility]
+
         return {
-            "landmarks": np.zeros((33, 4), dtype=np.float32),
-            "detected": False,
+            "landmarks": landmarks,
+            "detected": detected,
         }
 
     def release(self):

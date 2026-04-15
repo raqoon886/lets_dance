@@ -54,8 +54,8 @@ class SkeletonGraphBuilder:
             Dict with 'node_features' (num_joints, feat_dim) and
             'edge_index' (2, num_edges)
         """
-        # TODO: Combine position + velocity features as node features
-        node_features = np.zeros((self.num_joints, 3), dtype=np.float32)
+        node_features = landmarks.astype(np.float32) if landmarks is not None \
+            else np.zeros((self.num_joints, 3), dtype=np.float32)
         return {
             "node_features": node_features,
             "edge_index": self._edge_index,
@@ -72,12 +72,40 @@ class SkeletonGraphBuilder:
         Returns:
             Dict with 'node_features', 'edge_index', 'temporal_edge_index'
         """
-        # TODO: Stack spatial graphs and add inter-frame temporal edges
         seq_len = len(landmark_sequence)
-        total_nodes = seq_len * self.num_joints
+        # Stack all node features
+        all_features = []
+        for lm in landmark_sequence:
+            arr = np.array(lm, dtype=np.float32)
+            if arr.ndim == 1:
+                arr = arr.reshape(self.num_joints, -1)
+            all_features.append(arr)
+        node_features = np.concatenate(all_features, axis=0)
+
+        # Build spatial edges for each frame (offset by frame * num_joints)
+        spatial_src, spatial_dst = [], []
+        for t in range(seq_len):
+            offset = t * self.num_joints
+            for s, d in self.ADJACENCY:
+                spatial_src.extend([s + offset, d + offset])
+                spatial_dst.extend([d + offset, s + offset])
+        spatial_edge_index = np.array([spatial_src, spatial_dst], dtype=np.int64)
+
+        # Build temporal edges (same joint across consecutive frames)
+        temp_src, temp_dst = [], []
+        for t in range(seq_len - 1):
+            for j in range(self.num_joints):
+                curr = t * self.num_joints + j
+                nxt = (t + 1) * self.num_joints + j
+                temp_src.extend([curr, nxt])
+                temp_dst.extend([nxt, curr])
+        temporal_edge_index = np.array(
+            [temp_src, temp_dst], dtype=np.int64
+        ) if temp_src else np.zeros((2, 0), dtype=np.int64)
+
         return {
-            "node_features": np.zeros((total_nodes, 3), dtype=np.float32),
-            "edge_index": self._edge_index,
-            "temporal_edge_index": np.zeros((2, 0), dtype=np.int64),
+            "node_features": node_features,
+            "edge_index": spatial_edge_index,
+            "temporal_edge_index": temporal_edge_index,
             "sequence_length": seq_len,
         }
