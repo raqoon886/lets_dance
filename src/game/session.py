@@ -30,23 +30,39 @@ class GameSession:
         self.is_active = True
         self._frame_index = 0
 
-    def update(self, user_embedding: np.ndarray) -> dict:
+    def update(self, user_embedding: np.ndarray = None,
+               similarity: float = None) -> dict:
         """
-        Process one frame's embedding during gameplay.
+        Process one frame during gameplay.
 
         Args:
-            user_embedding: User's dance embedding for current window
+            user_embedding: User's dance embedding for current window (optional)
+            similarity: Pre-computed similarity score (optional, used in demo mode)
 
         Returns:
-            Dict with current score data or None if no reference available
+            Dict with current score data
         """
-        # TODO:
-        # 1. Get corresponding reference embedding by frame index
-        # 2. Compute similarity
-        # 3. Return evaluation result
         self._frame_index += 1
+
+        # Use pre-computed similarity if provided (demo mode)
+        if similarity is not None:
+            sim = similarity
+        elif user_embedding is not None:
+            # Get corresponding reference embedding by frame index
+            ref_embeddings = self.reference_data.get("embeddings", [])
+            if self._frame_index < len(ref_embeddings):
+                ref = ref_embeddings[self._frame_index]
+                from scoring.similarity import SimilarityCalculator
+                calc = SimilarityCalculator(metric="cosine")
+                sim = calc.compute(user_embedding, ref)
+            else:
+                sim = 0.0
+        else:
+            sim = 0.0
+
+        self._scores.append(sim)
         return {
-            "similarity": 0.0,
+            "similarity": sim,
             "frame_index": self._frame_index,
         }
 
