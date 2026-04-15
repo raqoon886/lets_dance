@@ -44,7 +44,7 @@ def main():
                         help="유사도 계산 방식: direct(키포인트 비교) / embedding(ST-GCN 임베딩) (기본: direct)")
     parser.add_argument("--similarity", "-S",
                         choices=["cosine", "euclidean", "hybrid", "angle"],
-                        default="cosine",
+                        default="angle",
                         help="direct 모드 유사도 메트릭: cosine / euclidean / hybrid / angle (기본: cosine)")
     parser.add_argument("--delay", "-d", type=float, default=1.0,
                         help="반응 딜레이 허용 시간(초). 유저가 보고 따라하는 시간 보정 (기본: 1.0)")
