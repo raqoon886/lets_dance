@@ -1,0 +1,12 @@
+{
+  "id": "hiphop_move",
+  "title": "힙합 무브",
+  "artist": "Let's Dance",
+  "duration": 75,
+  "bpm": 95,
+  "difficulty": 2,
+  "mode": [
+    "practice",
+    "challenge"
+  ]
+}

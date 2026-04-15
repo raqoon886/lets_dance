@@ -58,7 +58,23 @@ class DanceEmbeddingModel:
         Returns:
             Embedding vector of shape (embedding_dim,)
         """
-        # TODO: Convert to torch tensors, run through model, return numpy
+        # Demo mode: generate deterministic embedding from node features
+        # (until a trained model is available)
+        node_features = graph_data.get("node_features", None)
+        if node_features is not None and np.any(node_features != 0):
+            # Create a simple embedding by hashing the pose data
+            flat = node_features.flatten().astype(np.float32)
+            # Project to embedding_dim via simple averaging + tiling
+            if len(flat) > 0:
+                # Repeat/tile to match embedding_dim
+                repeated = np.tile(flat, (self.embedding_dim // len(flat)) + 1)[:self.embedding_dim]
+                # Add some non-linearity
+                embedding = np.tanh(repeated)
+                # L2 normalize
+                norm = np.linalg.norm(embedding)
+                if norm > 1e-6:
+                    embedding = embedding / norm
+                return embedding.astype(np.float32)
         return np.zeros(self.embedding_dim, dtype=np.float32)
 
     def train_mode(self):
