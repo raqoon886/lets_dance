@@ -508,7 +508,7 @@ class GameEngine:
                     start_idx = max(0, self._ref_current_idx - tolerance_frames)
                     end_idx = self._ref_current_idx + 1  # 현재 프레임 포함
 
-                    best_sim = 0.0
+                    best_sims = []
                     for ri in range(start_idx, end_idx):
                         ref_lm = self._ref_landmarks[ri]
                         if self._similarity_method == "euclidean":
@@ -523,9 +523,11 @@ class GameEngine:
                         else:
                             s = self._pose_comparator.cosine_similarity(
                                 self._current_landmarks, ref_lm)
-                        if s > best_sim:
-                            best_sim = s
-                    sim = best_sim
+                        best_sims.append(s)
+                    # 상위 3개 평균 (윈도우 내 순간 최대가 아닌 안정적 매칭)
+                    best_sims.sort(reverse=True)
+                    top_k = best_sims[:min(3, len(best_sims))]
+                    sim = sum(top_k) / len(top_k)
 
                     # 디버그: 현재 프레임과만 비교한 값 vs 윈도우 최대값
                     if self._similarity_method == "angle":
@@ -540,7 +542,7 @@ class GameEngine:
                     else:
                         sim_now = self._pose_comparator.cosine_similarity(
                             self._current_landmarks, self._ref_frame_landmarks)
-                    print(f"\r[DBG] now={sim_now:.3f} best={sim:.3f} win={end_idx-start_idx}f idx={self._ref_current_idx}", end="")
+                    print(f"\r[DBG] now={sim_now:.3f} top3={sim:.3f} max={best_sims[0]:.3f} win={end_idx-start_idx}f", end="")
                 else:
                     # embedding: ST-GCN 임베딩 비교 (TODO: 구현 후 연결)
                     # 현재는 fallback으로 detection confidence 사용
