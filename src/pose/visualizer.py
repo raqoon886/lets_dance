@@ -37,8 +37,25 @@ class PoseVisualizer:
         Returns:
             Frame with skeleton drawn on it
         """
-        # TODO: Draw lines for connections and circles for joints using cv2
-        return frame.copy()
+        import cv2
+        output = frame.copy()
+        h, w = output.shape[:2]
+        default_color = self.COLORS["torso"]
+
+        # Draw connections
+        for i, (src, dst) in enumerate(connections):
+            if src < len(landmarks) and dst < len(landmarks):
+                pt1 = (int(landmarks[src][0] * w), int(landmarks[src][1] * h))
+                pt2 = (int(landmarks[dst][0] * w), int(landmarks[dst][1] * h))
+                color = color_map.get(i, default_color) if color_map else default_color
+                cv2.line(output, pt1, pt2, color, self.line_thickness)
+
+        # Draw joints
+        for i in range(len(landmarks)):
+            pt = (int(landmarks[i][0] * w), int(landmarks[i][1] * h))
+            cv2.circle(output, pt, self.joint_radius, self.COLORS["joint"], -1)
+
+        return output
 
     def draw_comparison(self, frame: np.ndarray,
                         user_landmarks: np.ndarray,
@@ -46,31 +63,42 @@ class PoseVisualizer:
                         connections: list) -> np.ndarray:
         """
         Draw both user and reference skeletons for visual comparison.
-
-        Args:
-            frame: BGR image (H, W, 3)
-            user_landmarks: User's detected landmarks (N, 2)
-            reference_landmarks: Reference dance landmarks (N, 2)
-            connections: Skeleton connection pairs
-
-        Returns:
-            Frame with both skeletons drawn
         """
-        # TODO: Draw reference skeleton semi-transparent, user skeleton solid
-        return frame.copy()
+        import cv2
+        output = frame.copy()
+        h, w = output.shape[:2]
+
+        # Draw reference skeleton (semi-transparent magenta)
+        overlay = output.copy()
+        for src, dst in connections:
+            if src < len(reference_landmarks) and dst < len(reference_landmarks):
+                pt1 = (int(reference_landmarks[src][0] * w), int(reference_landmarks[src][1] * h))
+                pt2 = (int(reference_landmarks[dst][0] * w), int(reference_landmarks[dst][1] * h))
+                cv2.line(overlay, pt1, pt2, self.COLORS["reference"], self.line_thickness)
+        cv2.addWeighted(overlay, 0.4, output, 0.6, 0, output)
+
+        # Draw user skeleton (solid)
+        output = self.draw_skeleton(output, user_landmarks, connections)
+        return output
 
     def draw_feedback_indicator(self, frame: np.ndarray,
                                  score: float, position: tuple) -> np.ndarray:
         """
         Draw real-time score feedback indicator (Perfect/Great/Good/Miss).
-
-        Args:
-            frame: BGR image
-            score: Current similarity score (0-100)
-            position: (x, y) position to draw indicator
-
-        Returns:
-            Frame with feedback indicator
         """
-        # TODO: Draw colored text based on score thresholds
-        return frame.copy()
+        import cv2
+        output = frame.copy()
+        if score >= 90:
+            text, color = "PERFECT!", (0, 215, 255)
+        elif score >= 75:
+            text, color = "GREAT!", (128, 255, 0)
+        elif score >= 60:
+            text, color = "GOOD", (255, 200, 0)
+        elif score >= 40:
+            text, color = "OK", (200, 200, 200)
+        else:
+            text, color = "MISS", (50, 50, 255)
+
+        cv2.putText(output, text, position, cv2.FONT_HERSHEY_SIMPLEX,
+                     1.2, color, 3, cv2.LINE_AA)
+        return output

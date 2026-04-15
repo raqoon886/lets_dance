@@ -36,7 +36,7 @@ game:
 
 ui:
   window_width: 1024
-  window_height: 600
+  window_height: 550
   fullscreen: false
   theme: "neon"                # neon, minimal, retro
   show_skeleton: true
