@@ -32,6 +32,7 @@ class GameEngine:
     def __init__(self, config: dict):
         self.config = config
         self.state = GameState.MENU
+        self._prev_state = None
         self.running = False
         self._camera = None
         self._pose_detector = None
@@ -56,8 +57,18 @@ class GameEngine:
         # 가이드 캐릭터용 참조 랜드마크
         self._ref_landmarks = None          # shape (N, 33, 4)
         self._ref_frame_landmarks = None    # shape (33, 4) — 현재 프레임
+        # 레퍼런스 영상 (mp4)
+        self._ref_video_cap = None          # cv2.VideoCapture
+        self._ref_video_fps: float = 30.0
+        self._ref_video_frame = None        # 현재 프레임 (numpy BGR)
+        self._ref_video_surf = None         # 캐시된 pygame Surface
+        self._ref_video_size: tuple = (0, 0)  # 미리 계산된 리사이즈 크기
+        self._ref_video_pos: tuple = (0, 0)   # 패널 내 배치 좌표
         # 피드백 이펙트 페이드 타이머 (초)
         self._feedback_timer: float = 0.0
+        # 실루엣 렌더러 (사람 형태 캐릭터)
+        self._user_silhouette = None
+        self._guide_silhouette = None
 
     def initialize(self):
         """
@@ -76,7 +87,7 @@ class GameEngine:
         h = ui_cfg.get("window_height", 600)
         flags = pygame.FULLSCREEN if ui_cfg.get("fullscreen", False) else 0
         self._display = pygame.display.set_mode((w, h), flags)
-        pygame.display.set_caption("Let's Dance! 🎵")
+        pygame.display.set_caption("Let's Dance!")
         self._clock = pygame.time.Clock()
 
         # Camera
@@ -111,6 +122,11 @@ class GameEngine:
 
         # ── 댄스 곡 목록 로드 ──
         self._songs = self._load_songs()
+
+        # ── 실루엣 렌더러는 사용하지 않음 (스틱 피겨로 대체 — 성능 최적화) ──
+        # 사용하지 않지만 호환성을 위해 None 유지
+        self._user_silhouette = None
+        self._guide_silhouette = None
 
         self.running = True
 
@@ -401,6 +417,8 @@ class GameEngine:
         if not ret:
             return
 
+        # 좌우반전 (거울 모드 — 사용자가 자연스럽게 보이도록)
+        frame = cv2.flip(frame, 1)
         self._current_frame = frame
 
         # Detect pose
@@ -415,6 +433,42 @@ class GameEngine:
                 len(self._ref_landmarks) - 1,
             )
             self._ref_frame_landmarks = self._ref_landmarks[fi]
+
+        # 레퍼런스 영상 프레임 동기화 (영상 fps 기준)
+        if self._ref_video_cap is not None and self._current_session:
+            video_fi = int(self._current_session.elapsed_time * self._ref_video_fps)
+            total_video_frames = int(self._ref_video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if video_fi < total_video_frames:
+                current_pos = int(self._ref_video_cap.get(cv2.CAP_PROP_POS_FRAMES))
+
+                # 영상fps > 게임fps이면 불필요한 프레임은 grab()으로 건너뜀
+                frames_to_skip = video_fi - current_pos
+                if frames_to_skip < 0 or frames_to_skip > 10:
+                    # 너무 멀면 seek
+                    self._ref_video_cap.set(cv2.CAP_PROP_POS_FRAMES, video_fi)
+                    frames_to_skip = 0
+                elif frames_to_skip > 1:
+                    # 중간 프레임은 grab만 (디코딩 안 함 — retrieve보다 훨씬 빠름)
+                    for _ in range(frames_to_skip - 1):
+                        self._ref_video_cap.grab()
+
+                vret, vframe = self._ref_video_cap.read()
+                if vret:
+                    self._ref_video_frame = vframe
+                    tw, th = self._ref_video_size
+                    if tw > 0 and th > 0:
+                        small = cv2.resize(vframe, (tw, th),
+                                           interpolation=cv2.INTER_NEAREST)
+                        # BGR→RGB + pygame Surface (frombuffer가 swapaxes보다 빠름)
+                        rgb = small[:, :, ::-1]
+                        import pygame
+                        self._ref_video_surf = pygame.image.frombuffer(
+                            rgb.tobytes(), (tw, th), "RGB")
+                    else:
+                        self._ref_video_surf = None
+            else:
+                self._ref_video_frame = None
+                self._ref_video_surf = None
 
         # Score based on pose detection (simulated reference matching)
         if self._pose_detected:
@@ -481,14 +535,39 @@ class GameEngine:
             color = (int(15 + 20 * alpha), int(10 + 10 * alpha), int(40 + 30 * alpha))
             pygame.draw.line(self._display, color, (0, y), (w, y))
 
+        # ── 레이아웃 계산 (동적으로 간격 분배) ──
+        MARGIN_TOP = 30           # 상단 여백
+        MARGIN_BOTTOM = 40        # 하단 여백 (footer 포함)
+        FOOTER_H = 28             # 조작 안내 영역
+        BTN_H = 52                # 모드 버튼 높이
+        SMALL_BTN_H = 44          # 설정/종료 버튼 높이
+        BTN_W = min(420, w - 60)  # 버튼 너비 (화면에 맞춤)
+        SMALL_BTN_W = min(195, (BTN_W - 20) // 2)  # 하단 작은 버튼 너비
+
+        # 세로 섹션: 타이틀(제목+부제) | 모드 버튼 ×3 | 하단 버튼 | 푸터
+        title_area_h = 100        # 타이틀 + 부제 공간
+        bottom_area_h = SMALL_BTN_H + FOOTER_H + 10  # 하단 버튼 + 푸터
+
+        # 모드 버튼 영역
+        mode_area_top = MARGIN_TOP + title_area_h + 20
+        mode_area_bottom = h - MARGIN_BOTTOM - bottom_area_h - 10
+        mode_area_h = mode_area_bottom - mode_area_top
+
+        # 버튼 3개를 영역 안에 균등 배치
+        num_btns = 3
+        total_btn_h = num_btns * BTN_H
+        gap = max(12, (mode_area_h - total_btn_h) // (num_btns + 1))
+
+        btn_start_y = mode_area_top + (mode_area_h - (total_btn_h + gap * (num_btns - 1))) // 2
+
         # Title
         title = self._fonts["title"].render("Let's Dance!", True, (0, 255, 200))
-        title_rect = title.get_rect(center=(w // 2, h // 5))
+        title_rect = title.get_rect(center=(w // 2, MARGIN_TOP + 35))
         self._display.blit(title, title_rect)
 
         # Subtitle
         sub = self._fonts["body"].render("AI 댄스 채점 게임", True, (180, 180, 220))
-        sub_rect = sub.get_rect(center=(w // 2, h // 5 + 60))
+        sub_rect = sub.get_rect(center=(w // 2, MARGIN_TOP + 80))
         self._display.blit(sub, sub_rect)
 
         # Menu 버튼 정의 (btn_name, label, color)
@@ -499,10 +578,11 @@ class GameEngine:
         ]
 
         mouse_pos = pygame.mouse.get_pos()
+        btn_x = w // 2 - BTN_W // 2
 
         for i, (btn_name, label, color) in enumerate(btn_defs):
-            y_pos = h // 2 + i * 75 - 40
-            rect = pygame.Rect(w // 2 - 210, y_pos, 420, 58)
+            y_pos = btn_start_y + i * (BTN_H + gap)
+            rect = pygame.Rect(btn_x, y_pos, BTN_W, BTN_H)
             self._btn_rects[btn_name] = rect
 
             # 호버/터치 시 밝게
@@ -513,15 +593,20 @@ class GameEngine:
             lbl_surf = self._fonts["body"].render(label, True, (255, 255, 255))
             self._display.blit(lbl_surf, lbl_surf.get_rect(center=rect.center))
 
-        # 설정 / 종료 버튼
-        btn_s_rect = pygame.Rect(w // 2 - 210, h - 100, 195, 48)
-        btn_q_rect = pygame.Rect(w // 2 + 15,  h - 100, 195, 48)
+        # 설정 / 종료 버튼 (하단, 좌우 대칭 배치)
+        bottom_btn_y = h - MARGIN_BOTTOM - FOOTER_H - SMALL_BTN_H - 4
+        btn_gap = 20
+        total_small_w = SMALL_BTN_W * 2 + btn_gap
+        small_x = w // 2 - total_small_w // 2
+
+        btn_s_rect = pygame.Rect(small_x, bottom_btn_y, SMALL_BTN_W, SMALL_BTN_H)
+        btn_q_rect = pygame.Rect(small_x + SMALL_BTN_W + btn_gap, bottom_btn_y, SMALL_BTN_W, SMALL_BTN_H)
         self._btn_rects["btn_settings"] = btn_s_rect
         self._btn_rects["btn_quit"]     = btn_q_rect
 
         for rect, label, color in [
-            (btn_s_rect, "⚙  설정",  (80, 80, 160)),
-            (btn_q_rect, "✕  종료",  (160, 60, 60)),
+            (btn_s_rect, "설정",  (80, 80, 160)),
+            (btn_q_rect, "종료",  (160, 60, 60)),
         ]:
             hover = rect.collidepoint(mouse_pos)
             draw_color = tuple(min(c + 40, 255) for c in color) if hover else color
@@ -534,7 +619,7 @@ class GameEngine:
         footer = self._fonts["small"].render(
             "Enter/Space: 시작  |  P: 일시정지  |  ESC: 종료", True, (100, 100, 130)
         )
-        self._display.blit(footer, footer.get_rect(center=(w // 2, h - 20)))
+        self._display.blit(footer, footer.get_rect(center=(w // 2, h - MARGIN_BOTTOM // 2 - 2)))
 
     def _render_song_select(self, w, h):
         """곡 선택 화면을 렌더링합니다."""
@@ -547,15 +632,21 @@ class GameEngine:
         }
         DIFF_STARS = {0: "자유", 1: "★☆☆", 2: "★★☆", 3: "★★★"}
 
+        HEADER_H = 56
+        FOOTER_H = 36          # 뒤로가기 + 조작 안내 영역
+        BOTTOM_MARGIN = 56     # 뒤로가기 버튼 + 여백
+        BODY_TOP = HEADER_H + 10
+        BODY_BOTTOM = h - BOTTOM_MARGIN - FOOTER_H
+
         self._display.fill((12, 8, 35))
 
         # 헤더
-        header_bg = pygame.Rect(0, 0, w, 56)
+        header_bg = pygame.Rect(0, 0, w, HEADER_H)
         pygame.draw.rect(self._display, (25, 18, 60), header_bg)
         title_txt = self._fonts["menu"].render(
             f"{MODE_LABELS.get(self._current_mode, '')}  —  곡 선택", True, (200, 200, 255)
         )
-        self._display.blit(title_txt, title_txt.get_rect(midleft=(20, 28)))
+        self._display.blit(title_txt, title_txt.get_rect(midleft=(20, HEADER_H // 2)))
 
         songs = self._songs_for_mode(self._current_mode)
         mouse_pos = pygame.mouse.get_pos()
@@ -564,13 +655,22 @@ class GameEngine:
             msg = self._fonts["body"].render("이 모드에서 플레이 가능한 곡이 없습니다.", True, (180, 100, 100))
             self._display.blit(msg, msg.get_rect(center=(w // 2, h // 2)))
         else:
-            # ── 곡 카드 목록 (왼쪽 55%) ──
-            card_w, card_h = int(w * 0.52), 68
+            # ── 곡 카드 목록 (왼쪽 54%) ──
+            card_area_w = int(w * 0.54)
+            card_w = card_area_w - 40
             card_x = 20
-            card_start_y = 72
+            card_start_y = BODY_TOP
+            available_h = BODY_BOTTOM - card_start_y
+
+            # 카드 높이와 간격을 곡 수에 따라 동적 계산
+            num_songs = len(songs)
+            card_h = min(68, max(48, (available_h - 10 * num_songs) // max(num_songs, 1)))
+            card_gap = min(10, max(4, (available_h - card_h * num_songs) // max(num_songs, 1)))
 
             for i, song in enumerate(songs):
-                cy = card_start_y + i * (card_h + 10)
+                cy = card_start_y + i * (card_h + card_gap)
+                if cy + card_h > BODY_BOTTOM:
+                    break  # 영역 초과 시 더 이상 표시하지 않음
                 rect = pygame.Rect(card_x, cy, card_w, card_h)
                 self._btn_rects[f"btn_song_{i}"] = rect
 
@@ -592,7 +692,7 @@ class GameEngine:
 
                 # 곡 제목
                 title_s = self._fonts["body"].render(song.get("title", "?"), True, (255, 255, 255))
-                self._display.blit(title_s, (rect.x + 14, rect.y + 10))
+                self._display.blit(title_s, (rect.x + 14, rect.y + 6))
 
                 # BPM / 난이도
                 diff  = DIFF_STARS.get(song.get("difficulty", 0), "")
@@ -600,33 +700,48 @@ class GameEngine:
                 dur   = song.get("duration", 0)
                 info  = f"BPM {bpm}  |  {dur}초  |  {diff}"
                 info_s = self._fonts["small"].render(info, True, (160, 160, 190))
-                self._display.blit(info_s, (rect.x + 14, rect.y + 38))
+                self._display.blit(info_s, (rect.x + 14, rect.y + card_h - 24))
 
-            # ── 선택된 곡 상세 패널 (오른쪽 40%) ──
+            # ── 선택된 곡 상세 패널 (오른쪽) ──
             if 0 <= self._selected_song_idx < len(songs):
                 sel = songs[self._selected_song_idx]
-                px = int(w * 0.58)
-                panel = pygame.Rect(px, 70, w - px - 16, h - 160)
+                panel_x = card_area_w + 10
+                panel_w = w - panel_x - 16
+                start_btn_h = 48
+                start_btn_margin = 12
+                panel_y = BODY_TOP
+                panel_h = BODY_BOTTOM - panel_y
+                panel = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
                 pygame.draw.rect(self._display, (22, 18, 52), panel, border_radius=14)
                 pygame.draw.rect(self._display, (80, 70, 140), panel, 2, border_radius=14)
 
-                py = panel.y + 20
-                for label, val in [
+                # 상세 항목들을 패널 안에 동적 배치
+                detail_items = [
                     ("곡 제목",  sel.get("title", "-")),
                     ("아티스트", sel.get("artist", "-")),
                     ("BPM",     str(sel.get("bpm", 0))),
                     ("길이",    f"{sel.get('duration', 0)}초"),
                     ("난이도",  DIFF_STARS.get(sel.get("difficulty", 0), "-")),
                     ("레퍼런스", "있음" if sel.get("has_reference") else "없음"),
-                ]:
+                ]
+                detail_area_h = panel_h - start_btn_h - start_btn_margin * 2 - 20
+                item_h = min(52, max(36, detail_area_h // max(len(detail_items), 1)))
+
+                py_detail = panel.y + 14
+                for label, val in detail_items:
                     lbl_s = self._fonts["small"].render(label, True, (140, 140, 180))
                     val_s = self._fonts["body"].render(str(val), True, (220, 220, 255))
-                    self._display.blit(lbl_s, (panel.x + 16, py))
-                    self._display.blit(val_s, (panel.x + 16, py + 20))
-                    py += 58
+                    self._display.blit(lbl_s, (panel.x + 16, py_detail))
+                    self._display.blit(val_s, (panel.x + 16, py_detail + 18))
+                    py_detail += item_h
 
-                # 시작 버튼
-                start_rect = pygame.Rect(panel.x + 20, h - 145, panel.width - 40, 52)
+                # 시작 버튼 (패널 하단에 고정)
+                start_rect = pygame.Rect(
+                    panel.x + 16,
+                    panel.y + panel_h - start_btn_h - start_btn_margin,
+                    panel_w - 32,
+                    start_btn_h,
+                )
                 self._btn_rects["btn_song_start"] = start_rect
                 hover_s = start_rect.collidepoint(mouse_pos)
                 pygame.draw.rect(self._display,
@@ -636,8 +751,9 @@ class GameEngine:
                 go_s = self._fonts["menu"].render("▶  시작하기", True, (255, 255, 255))
                 self._display.blit(go_s, go_s.get_rect(center=start_rect.center))
 
-        # 뒤로가기 버튼
-        back_rect = pygame.Rect(16, h - 72, 150, 44)
+        # 뒤로가기 버튼 (하단 고정)
+        back_y = h - BOTTOM_MARGIN - FOOTER_H + 4
+        back_rect = pygame.Rect(16, back_y, 150, 40)
         self._btn_rects["btn_song_back"] = back_rect
         hover_b = back_rect.collidepoint(mouse_pos)
         pygame.draw.rect(self._display, (70, 55, 110) if hover_b else (50, 40, 80),
@@ -650,7 +766,7 @@ class GameEngine:
         hint = self._fonts["small"].render(
             "터치/클릭으로 곡 선택  |  ESC: 뒤로", True, (90, 90, 120)
         )
-        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 18)))
+        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 14)))
 
     def _render_countdown(self, w, h):
         """Render countdown screen."""
@@ -807,12 +923,15 @@ class GameEngine:
 
         if hasattr(self, '_pose_detected') and self._pose_detected and \
                 self._current_landmarks is not None:
+            # 스틱 피겨로 그리기 (실루엣보다 훨씬 가벼움)
             self._draw_stick_figure(
                 self._display,
                 self._current_landmarks,
                 left_fig_rect,
-                line_color=(0, 200, 255),
-                joint_color=(0, 255, 200),
+                line_color=(80, 220, 255),
+                joint_color=(200, 250, 255),
+                line_width=4,
+                joint_radius=6,
             )
         else:
             # 포즈 미감지 안내
@@ -822,9 +941,33 @@ class GameEngine:
 
         # 카메라 피드 (작게, 좌 하단)
         if hasattr(self, '_current_frame') and self._current_frame is not None:
-            frame_rgb = cv2.cvtColor(self._current_frame, cv2.COLOR_BGR2RGB)
-            frame_small = cv2.resize(frame_rgb, (CAM_W, CAM_H))
-            cam_surf = pygame.surfarray.make_surface(frame_small.swapaxes(0, 1))
+            frame_small = cv2.resize(self._current_frame, (CAM_W, CAM_H),
+                                     interpolation=cv2.INTER_NEAREST)
+
+            # ── 카메라 피드 위에 스켈레톤 오버레이 그리기 ──
+            if hasattr(self, '_pose_detected') and self._pose_detected and \
+                    self._current_landmarks is not None:
+                from pose.landmark_utils import SKELETON_CONNECTIONS, DANCE_JOINTS
+                lm = self._current_landmarks
+                cam_h_orig, cam_w_orig = self._current_frame.shape[:2]
+                for src, dst in SKELETON_CONNECTIONS:
+                    if src < len(lm) and dst < len(lm) and \
+                       lm[src][3] > 0.3 and lm[dst][3] > 0.3:
+                        x1 = int(lm[src][0] * CAM_W)
+                        y1 = int(lm[src][1] * CAM_H)
+                        x2 = int(lm[dst][0] * CAM_W)
+                        y2 = int(lm[dst][1] * CAM_H)
+                        cv2.line(frame_small, (x1, y1), (x2, y2), (0, 255, 200), 2)
+                for idx in DANCE_JOINTS:
+                    if idx < len(lm) and lm[idx][3] > 0.3:
+                        cx = int(lm[idx][0] * CAM_W)
+                        cy = int(lm[idx][1] * CAM_H)
+                        cv2.circle(frame_small, (cx, cy), 3, (0, 255, 255), -1)
+
+            # BGR→RGB + Surface 변환 (frombuffer가 swapaxes보다 빠름)
+            frame_rgb = frame_small[:, :, ::-1]
+            cam_surf = pygame.image.frombuffer(
+                frame_rgb.tobytes(), (CAM_W, CAM_H), "RGB")
             # 카메라 피드 테두리
             pygame.draw.rect(self._display, (40, 40, 70),
                              pygame.Rect(cam_x - 2, cam_y - 2, CAM_W + 4, CAM_H + 4),
@@ -843,7 +986,7 @@ class GameEngine:
                                no_cam.get_rect(center=(cam_x + CAM_W // 2, cam_y + CAM_H // 2)))
 
         # ══════════════════════════════════════════════════════
-        #  RIGHT — 가이드 캐릭터 + 피드백 이펙트
+        #  RIGHT — 가이드: 영상이 있으면 mp4만 재생, 없으면 실루엣
         # ══════════════════════════════════════════════════════
 
         # 우 패널 배경
@@ -855,20 +998,28 @@ class GameEngine:
         lbl_guide = self._fonts["small"].render("가이드", True, (255, 160, 80))
         self._display.blit(lbl_guide, (right_panel[0] + 12, right_panel[1] + 8))
 
-        right_fig_rect = (right_panel[0], BODY_Y, right_panel[2], BODY_H)
+        has_video = self._ref_video_cap is not None
 
-        if self._ref_frame_landmarks is not None:
+        if has_video and self._ref_video_surf is not None:
+            # ── 영상이 있는 곡: mp4를 패널에 직접 표시 (실루엣 렌더링 불필요) ──
+            vx, vy = self._ref_video_pos
+            self._display.blit(self._ref_video_surf, (vx, vy))
+        elif not has_video and self._ref_frame_landmarks is not None:
+            # ── 영상이 없는 곡: 스틱 피겨 (실루엣보다 가벼움) ──
+            right_fig_rect = (right_panel[0], BODY_Y, right_panel[2], BODY_H)
             self._draw_stick_figure(
                 self._display,
                 self._ref_frame_landmarks,
                 right_fig_rect,
-                line_color=(255, 140, 0),
-                joint_color=(255, 200, 80),
+                line_color=(255, 170, 80),
+                joint_color=(255, 220, 140),
+                line_width=4,
+                joint_radius=6,
             )
         else:
             # 가이드 없음 안내
-            no_guide = self._fonts["body"].render("가이드 캐릭터 없음", True, (80, 70, 60))
-            rp_rect = pygame.Rect(*right_fig_rect)
+            rp_rect = pygame.Rect(right_panel[0], BODY_Y, right_panel[2], BODY_H)
+            no_guide = self._fonts["body"].render("가이드 없음", True, (80, 70, 60))
             self._display.blit(no_guide, no_guide.get_rect(center=rp_rect.center))
 
         # ── 피드백 이펙트 (가이드 캐릭터 위에 오버레이) ─────────────
@@ -1008,13 +1159,24 @@ class GameEngine:
 
         self._display.fill((15, 10, 40))
 
+        MARGIN_TOP = 30
+        MARGIN_BOTTOM = 40
+        FOOTER_H = 24
+        BTN_H = 50
+        BTN_W = min(200, (w - 60) // 2)
+
+        # 타이틀
         title = self._fonts["title"].render("DANCE COMPLETE!", True, (255, 220, 50))
-        title_rect = title.get_rect(center=(w // 2, 55))
+        title_rect = title.get_rect(center=(w // 2, MARGIN_TOP + 30))
         self._display.blit(title, title_rect)
+
+        # 하단 버튼/푸터 영역 계산
+        btn_area_y = h - MARGIN_BOTTOM - FOOTER_H - BTN_H - 10
+        content_top = MARGIN_TOP + 80
+        content_bottom = btn_area_y - 20
 
         if self._result_data:
             data = self._result_data
-            y = 130
             items = [
                 (f"총점: {data.get('total_score', 0)}",       (0, 255, 200)),
                 (f"최대 콤보: {data.get('max_combo', 0)}",    (255, 220, 0)),
@@ -1022,26 +1184,35 @@ class GameEngine:
                 (f"평균: {data.get('average_score', 0):.1f}", (180, 180, 255)),
                 (f"등급: {data.get('final_grade', '-')}",     (255, 180, 0)),
             ]
+
+            hits = data.get("hit_counts", {})
+            total_items = len(items) + (1 if hits else 0)
+            item_gap = min(48, max(30, (content_bottom - content_top) // max(total_items, 1)))
+
+            y = content_top
             for text, color in items:
                 surf = self._fonts["menu"].render(text, True, color)
                 self._display.blit(surf, surf.get_rect(center=(w // 2, y)))
-                y += 55
+                y += item_gap
 
-            hits = data.get("hit_counts", {})
             if hits:
-                y += 5
+                y += 4
                 hit_text = "  |  ".join(f"{k}: {v}" for k, v in hits.items())
                 hit_surf = self._fonts["body"].render(hit_text, True, (160, 160, 180))
                 self._display.blit(hit_surf, hit_surf.get_rect(center=(w // 2, y)))
 
-        # 버튼: 다시하기 / 메뉴
+        # 버튼: 다시하기 / 메뉴 (하단 고정, 중앙 정렬)
         mouse_pos = pygame.mouse.get_pos()
+        btn_gap = 20
+        total_w = BTN_W * 2 + btn_gap
+        btn_x = w // 2 - total_w // 2
+
         btn_defs = [
             ("btn_retry",       "↻  다시하기", (0, 140, 90)),
             ("btn_result_menu", "홈 화면",    (100, 40, 120)),
         ]
         for i, (btn_name, label, color) in enumerate(btn_defs):
-            rect = pygame.Rect(w // 2 - 215 + i * 230, h - 90, 210, 54)
+            rect = pygame.Rect(btn_x + i * (BTN_W + btn_gap), btn_area_y, BTN_W, BTN_H)
             self._btn_rects[btn_name] = rect
             hover = rect.collidepoint(mouse_pos)
             draw_color = tuple(min(c + 50, 255) for c in color) if hover else color
@@ -1053,7 +1224,7 @@ class GameEngine:
         hint = self._fonts["small"].render(
             "Enter: 메뉴  |  ESC: 메뉴", True, (100, 100, 130)
         )
-        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 18)))
+        self._display.blit(hint, hint.get_rect(center=(w // 2, h - MARGIN_BOTTOM // 2)))
 
     def _render_settings(self, w, h):
         """Render settings screen."""
@@ -1061,8 +1232,13 @@ class GameEngine:
 
         self._display.fill((15, 10, 40))
 
+        MARGIN_TOP = 30
+        MARGIN_BOTTOM = 40
+        FOOTER_H = 24
+        BTN_H = 50
+
         title = self._fonts["title"].render("설정", True, (200, 200, 255))
-        self._display.blit(title, title.get_rect(center=(w // 2, 55)))
+        self._display.blit(title, title.get_rect(center=(w // 2, MARGIN_TOP + 30)))
 
         settings_items = [
             f"카메라 장치: {self.config.get('camera', {}).get('device_id', 0)}",
@@ -1073,13 +1249,24 @@ class GameEngine:
             f"유사도 메트릭: {self.config.get('scoring', {}).get('similarity_metric', 'cosine')}",
             f"목표 FPS: {self.TARGET_FPS}",
         ]
+
+        # 버튼 영역
+        btn_y = h - MARGIN_BOTTOM - FOOTER_H - BTN_H - 10
+        content_top = MARGIN_TOP + 80
+        content_bottom = btn_y - 20
+
+        # 동적 간격 계산
+        num_items = len(settings_items)
+        item_gap = min(46, max(28, (content_bottom - content_top) // max(num_items, 1)))
+        start_y = content_top + ((content_bottom - content_top) - item_gap * num_items) // 2
+
         for i, text in enumerate(settings_items):
             surf = self._fonts["body"].render(text, True, (180, 180, 200))
-            self._display.blit(surf, (w // 2 - 220, 130 + i * 50))
+            self._display.blit(surf, (w // 2 - 220, start_y + i * item_gap))
 
-        # 뒤로가기 버튼
+        # 뒤로가기 버튼 (하단 고정)
         mouse_pos = pygame.mouse.get_pos()
-        back_rect = pygame.Rect(w // 2 - 110, h - 90, 220, 54)
+        back_rect = pygame.Rect(w // 2 - 110, btn_y, 220, BTN_H)
         self._btn_rects["btn_back"] = back_rect
         hover = back_rect.collidepoint(mouse_pos)
         pygame.draw.rect(self._display, (70, 70, 150) if hover else (50, 50, 110),
@@ -1089,11 +1276,12 @@ class GameEngine:
         self._display.blit(lbl, lbl.get_rect(center=back_rect.center))
 
         hint = self._fonts["small"].render("ESC: 뒤로", True, (100, 100, 130))
-        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 18)))
+        self._display.blit(hint, hint.get_rect(center=(w // 2, h - MARGIN_BOTTOM // 2)))
 
     def transition_to(self, new_state: str):
         """Transition to a new game state."""
         old_state = self.state
+        self._prev_state = old_state
         self.state = new_state
         self._on_state_enter(new_state)
 
@@ -1105,8 +1293,13 @@ class GameEngine:
             self._countdown_start = time.time()
             self._countdown_timer = 3
         elif state == GameState.PLAYING:
-            # PAUSED에서 복귀하는 경우 세션 유지
-            if not (self._current_session and self._current_session.is_active):
+            # PAUSED→PLAYING 복귀인 경우에만 세션 유지
+            resuming_from_pause = getattr(self, '_prev_state', None) == GameState.PAUSED
+            if not resuming_from_pause:
+                # 새 게임 시작: 이전 세션 완전 정리
+                if self._current_session is not None:
+                    self._current_session.is_active = False
+                    self._current_session = None
                 self._scorer.reset()
                 self._last_feedback = None
                 self._feedback_timer = 0.0
@@ -1115,14 +1308,61 @@ class GameEngine:
                 # 참조 랜드마크 로드
                 self._ref_landmarks = None
                 self._ref_frame_landmarks = None
+                # 레퍼런스 영상 초기화
+                if self._ref_video_cap is not None:
+                    self._ref_video_cap.release()
+                    self._ref_video_cap = None
+                self._ref_video_frame = None
+                self._ref_video_fps = 30.0
+
                 if self._current_song and self._current_song.get("has_reference"):
                     import numpy as np
+                    import cv2 as _cv2
                     ref_path = os.path.join(self._current_song["path"], "reference.npy")
                     try:
                         self._ref_landmarks = np.load(ref_path)  # (N, 33, 4)
                         print(f"[INFO] 참조 랜드마크 로드: {self._ref_landmarks.shape}")
                     except Exception as e:
                         print(f"[WARN] 참조 랜드마크 로드 실패: {e}")
+
+                    # 레퍼런스 mp4 영상 로드 (metadata에 video 경로가 있는 경우)
+                    video_rel = self._current_song.get("video", "")
+                    if video_rel:
+                        # 절대 경로 구성
+                        project_root = os.path.dirname(os.path.dirname(
+                            os.path.dirname(os.path.abspath(__file__))))
+                        video_path = os.path.join(project_root, video_rel)
+                        if not os.path.exists(video_path):
+                            video_path = os.path.join(os.getcwd(), video_rel)
+                        if os.path.exists(video_path):
+                            self._ref_video_cap = _cv2.VideoCapture(video_path)
+                            self._ref_video_fps = self._current_song.get(
+                                "video_fps",
+                                self._ref_video_cap.get(_cv2.CAP_PROP_FPS) or 30.0,
+                            )
+                            # 영상 리사이즈 크기 미리 계산 (렌더링에서 반복 안 함)
+                            ui_cfg = self.config.get("ui", {})
+                            disp_w = ui_cfg.get("window_width", 1024)
+                            disp_h = ui_cfg.get("window_height", 600)
+                            HEADER_H = 55
+                            FOOTER_H = 30
+                            rp_w = disp_w - disp_w // 2  # 우 패널 너비
+                            rp_h = disp_h - HEADER_H - FOOTER_H
+                            vid_w = int(self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
+                            vid_h = int(self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
+                            if vid_w > 0 and vid_h > 0:
+                                vscale = min(rp_w / vid_w, rp_h / vid_h)
+                                tw, th = int(vid_w * vscale), int(vid_h * vscale)
+                                self._ref_video_size = (tw, th)
+                                self._ref_video_pos = (
+                                    disp_w // 2 + (rp_w - tw) // 2,
+                                    HEADER_H + (rp_h - th) // 2,
+                                )
+                            print(f"[INFO] 레퍼런스 영상 로드: {video_path} "
+                                  f"({self._ref_video_fps:.1f}fps, "
+                                  f"resize→{self._ref_video_size})")
+                        else:
+                            print(f"[WARN] 레퍼런스 영상 없음: {video_path}")
                 from game.session import GameSession
                 # 선택된 곡 정보 사용 (없으면 기본값)
                 song = self._current_song or {}
@@ -1147,6 +1387,9 @@ class GameEngine:
             self._pose_detector.release()
         if self._camera:
             self._camera.release()
+        if self._ref_video_cap is not None:
+            self._ref_video_cap.release()
+            self._ref_video_cap = None
         try:
             import pygame
             pygame.quit()

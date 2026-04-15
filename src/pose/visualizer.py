@@ -1,5 +1,6 @@
 """
 Pose Visualizer - Draws skeleton overlay on camera frames.
+Supports both simple skeleton lines and silhouette rendering.
 """
 
 import numpy as np

@@ -1,0 +1,12 @@
+{
+  "id": "cheerup_dance",
+  "title": "Cheer Up 댄스",
+  "artist": "TWICE",
+  "duration": 24,
+  "bpm": 120,
+  "difficulty": 2,
+  "mode": ["practice", "challenge"],
+  "video": "data/videos/cheerup_mediapipe_processed.mp4",
+  "video_fps": 59.94,
+  "source_npy": "data/videos/cheerup_mediapipe_processed_pose.npy"
+}
