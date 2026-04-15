@@ -6,6 +6,17 @@
 import cv2
 import time
 import numpy as np
+import threading
+import sys
+
+# 터미널에서 'q' 입력 감지용
+_stop_flag = False
+def _stdin_listener():
+    global _stop_flag
+    for line in sys.stdin:
+        if line.strip().lower() == 'q':
+            _stop_flag = True
+            break
 
 def test_webcam_fps(resolution=(640, 480), duration=10):
     """
@@ -27,7 +38,8 @@ def test_webcam_fps(resolution=(640, 480), duration=10):
     actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
     print(f"\n테스트 해상도: {actual_width}x{actual_height}")
-    print(f"테스트 지속시간: {duration}초\n")
+    print(f"테스트 지속시간: {duration}초")
+    print("종료: 터미널에 q 입력\n")
     
     frame_count = 0
     start_time = time.time()
@@ -41,6 +53,9 @@ def test_webcam_fps(resolution=(640, 480), duration=10):
         start_time = time.time()
         
         while time.time() - start_time < duration:
+            if _stop_flag:
+                print("\n터미널에서 q 입력으로 종료")
+                break
             frame_start = time.time()
             ret, frame = cap.read()
             frame_time = time.time() - frame_start
@@ -87,8 +102,17 @@ if __name__ == "__main__":
         (1280, 720),   # HD (더 무거움)
     ]
     
+    print("\n종료: 터미널에 q 입력\n")
+    
+    global _stop_flag
+    _stop_flag = False
+    listener = threading.Thread(target=_stdin_listener, daemon=True)
+    listener.start()
+    
     results = {}
     for res in resolutions:
+        if _stop_flag:
+            break
         try:
             fps = test_webcam_fps(resolution=res, duration=5)
             results[res] = fps
