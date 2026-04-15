@@ -458,7 +458,7 @@ class GameEngine:
 
         elif self.state == GameState.COUNTDOWN:
             elapsed = time.time() - self._countdown_start
-            remaining = 10 - int(elapsed)
+            remaining = 5 - int(elapsed)
             if remaining < 0:
                 self.transition_to(GameState.PLAYING)
             else:
@@ -1590,7 +1590,7 @@ class GameEngine:
                     self._current_song = songs[self._selected_song_idx]
         elif state == GameState.COUNTDOWN:
             self._countdown_start = time.time()
-            self._countdown_timer = 10  # 10초 카운트다운 (워밍업 시간 확보)
+            self._countdown_timer = 5  # 5초 카운트다운 (워밍업 시간 확보)
         elif state == GameState.PLAYING:
             # PAUSED→PLAYING 복귀인 경우에만 세션 유지
             resuming_from_pause = getattr(self, '_prev_state', None) == GameState.PAUSED
