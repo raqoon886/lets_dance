@@ -216,8 +216,9 @@ class PoseSimilarity:
         diff = np.abs(angles_a - angles_b)
         mean_diff = np.mean(diff)
 
-        # π → 0.0, 0 → 1.0 으로 선형 매핑
-        similarity = 1.0 - (mean_diff / np.pi)
+        # 지수 감쇠: 차이가 클수록 급격히 떨어짐
+        # 0° → 1.0, 15° → 0.72, 30° → 0.52, 45° → 0.37, 90° → 0.14
+        similarity = float(np.exp(-2.0 * mean_diff))
         return float(np.clip(similarity, 0.0, 1.0))
 
     def compare_sequence(self, seq_a: list, seq_b: list) -> list:
