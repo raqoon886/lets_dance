@@ -1,0 +1,48 @@
+# Let's Dance - Configuration Settings
+
+camera:
+  device_id: 0
+  width: 640
+  height: 480
+  fps: 30
+
+pose:
+  model_complexity: 1        # 0: Lite, 1: Full, 2: Heavy
+  min_detection_confidence: 0.5
+  min_tracking_confidence: 0.5
+  enable_segmentation: false
+
+embedding:
+  model_path: "data/models/dance_embedding.pth"
+  embedding_dim: 128
+  sequence_length: 30         # frames per sequence window
+  graph_hidden_dim: 64
+  num_graph_layers: 3
+
+scoring:
+  similarity_metric: "cosine"  # cosine, euclidean, dtw
+  score_scale: 100
+  combo_multiplier: 1.5
+  grade_thresholds:
+    perfect: 90
+    great: 75
+    good: 60
+    ok: 40
+
+game:
+  countdown_seconds: 3
+  default_mode: "practice"     # practice, challenge, freestyle
+  max_song_duration: 180       # seconds
+
+ui:
+  window_width: 1024
+  window_height: 600
+  fullscreen: false
+  theme: "neon"                # neon, minimal, retro
+  show_skeleton: true
+  show_reference: true
+  font_size: 24
+
+audio:
+  music_volume: 0.7
+  sfx_volume: 0.8
