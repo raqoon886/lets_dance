@@ -1,21 +1,38 @@
 """
 Similarity Calculator - Computes similarity between dance embeddings.
-Supports cosine similarity, Euclidean distance, and DTW.
+Supports cosine similarity, Euclidean distance, DTW, and Sliding Window Cosine.
 """
 
 import numpy as np
+from collections import deque
 
 
 class SimilarityCalculator:
-    """Computes similarity scores between user and reference dance embeddings."""
+    """Computes similarity scores between us er and reference dance embeddings."""
 
-    def __init__(self, metric="cosine"):
+    def __init__(self, metric="cosine", window_size=15):
+        """
+        Args:
+            metric: "cosine", "euclidean", "dtw", "sliding_window"
+            window_size: sliding_window 모드에서 사용할 윈도우 크기 (프레임 수)
+        """
         self.metric = metric
+        self.window_size = window_size
         self._metric_fn = {
             "cosine": self._cosine_similarity,
             "euclidean": self._euclidean_similarity,
             "dtw": self._dtw_similarity,
+            "sliding_window": self._sliding_window_cosine,
         }.get(metric, self._cosine_similarity)
+
+        # Sliding Window용 버퍼
+        self._user_buffer = deque(maxlen=window_size)
+        self._ref_buffer = deque(maxlen=window_size)
+
+    def reset(self):
+        """슬라이딩 윈도우 버퍼 초기화 (새 곡 시작 시 호출)."""
+        self._user_buffer.clear()
+        self._ref_buffer.clear()
 
     def compute(self, user_embedding: np.ndarray,
                 reference_embedding: np.ndarray) -> float:
@@ -29,6 +46,11 @@ class SimilarityCalculator:
         Returns:
             Similarity score in range [0.0, 1.0]
         """
+        if self.metric == "sliding_window":
+            # 슬라이딩 윈도우: 버퍼에 쌓고 평균으로 비교
+            self._user_buffer.append(user_embedding)
+            self._ref_buffer.append(reference_embedding)
+            return self._sliding_window_cosine()
         return self._metric_fn(user_embedding, reference_embedding)
 
     def compute_sequence(self, user_embeddings: list,
@@ -85,3 +107,22 @@ class SimilarityCalculator:
             return float(1.0 / (1.0 + distance))
         except ImportError:
             return 0.0
+
+    def _sliding_window_cosine(self) -> float:
+        """
+        Sliding Window Cosine Similarity.
+        최근 k개 프레임의 임베딩 평균끼리 코사인 유사도를 계산합니다.
+
+        수식:
+            score = cos(mean(E_user[t-k:t]), mean(E_ref[t-k:t]))
+
+        - 순간적인 관절 떨림(Jitter)을 평활화
+        - 실시간 게이지/콤보 바에 적합
+        """
+        if len(self._user_buffer) == 0:
+            return 0.0
+
+        user_mean = np.mean(self._user_buffer, axis=0)
+        ref_mean = np.mean(self._ref_buffer, axis=0)
+
+        return self._cosine_similarity(user_mean, ref_mean)
