@@ -21,7 +21,7 @@ embedding:
 
 scratch:
   model_dir: "data/models/scratch"
-  model_name: "gcn_e64"
+  model_name: "my_gcn_e64_bce"
   model_path: ""              # optional direct .tflite path; empty uses registry/model_name
   sequence_length: 30
   feature_dims: 2             # 2=xy, 3=xyz, 4=xyz+visibility
