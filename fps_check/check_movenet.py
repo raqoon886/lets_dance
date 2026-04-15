@@ -10,15 +10,43 @@ import tensorflow as tf
 import tensorflow_hub as hub
 import threading
 import sys
+import termios
+import tty
 
-# 터미널에서 'q' 입력 감지용
-_stop_flag = False
-def _stdin_listener():
-    global _stop_flag
-    for line in sys.stdin:
-        if line.strip().lower() == 'q':
-            _stop_flag = True
-            break
+class KeyboardReader:
+    def __init__(self):
+        self._key_buffer = []
+        self._lock = threading.Lock()
+        self._running = True
+        self._old_settings = None
+        self._thread = threading.Thread(target=self._reader_loop, daemon=True)
+
+    def start(self):
+        self._old_settings = termios.tcgetattr(sys.stdin)
+        tty.setcbreak(sys.stdin.fileno())
+        self._thread.start()
+
+    def stop(self):
+        self._running = False
+        if self._old_settings:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old_settings)
+
+    def _reader_loop(self):
+        while self._running:
+            try:
+                ch = sys.stdin.read(1)
+                if not ch:
+                    continue
+                with self._lock:
+                    self._key_buffer.append(ch)
+            except Exception:
+                break
+
+    def get_key(self):
+        with self._lock:
+            if self._key_buffer:
+                return self._key_buffer.pop(0)
+        return None
 
 def test_movenet_fps(model_type='lightning', duration=None):
     """
@@ -59,12 +87,10 @@ def test_movenet_fps(model_type='lightning', duration=None):
     actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
     print(f"⏱️  테스트: 무제한")
-    print(f"종료: 터미널에 q 입력 또는 화면 창에서 ESC 키")
+    print(f"종료: 터미널에서 q 키")
     
-    global _stop_flag
-    _stop_flag = False
-    listener = threading.Thread(target=_stdin_listener, daemon=True)
-    listener.start()
+    kb = KeyboardReader()
+    kb.start()
     print(f"📷 웹캠: {actual_width}x{actual_height}\n")
     
     frame_times = []
@@ -137,9 +163,10 @@ def test_movenet_fps(model_type='lightning', duration=None):
             
             cv2.imshow("MoveNet Test", frame)
             
-            # 터미널 q 입력 또는 화면 ESC 키로 종료
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q') or key == 27 or _stop_flag:
+            # 터미널 q 키로 종료
+            key_ch = kb.get_key()
+            cv2.waitKey(1)
+            if key_ch == 'q':
                 break
             
             # 진행 상황 출력
@@ -149,6 +176,7 @@ def test_movenet_fps(model_type='lightning', duration=None):
                 print(f"프레임: {frame_count:3d}, FPS: {avg_fps:6.2f}, 추론시간: {avg_inf:6.2f}ms")
     
     finally:
+        kb.stop()
         cap.release()
         cv2.destroyAllWindows()
     
@@ -194,7 +222,7 @@ if __name__ == "__main__":
     print("\n설명:")
     print("- 웹캠에서 실시간으로 Pose Detection 수행")
     print("- 키포인트가 화면에 표시됩니다")
-    print("- 종료: 터미널에 q 입력 또는 화면 창에서 ESC 키")
+    print("- 종료: 터미널에서 q 키")
     
     print("\n모델 선택:")
     print("- lightning: 빠름 (추천)")

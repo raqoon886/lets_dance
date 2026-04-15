@@ -8,15 +8,18 @@ import time
 import numpy as np
 import threading
 import sys
+import select
 
 # 터미널에서 'q' 입력 감지용
 _stop_flag = False
 def _stdin_listener():
     global _stop_flag
-    for line in sys.stdin:
-        if line.strip().lower() == 'q':
-            _stop_flag = True
-            break
+    while not _stop_flag:
+        if select.select([sys.stdin], [], [], 0.1)[0]:
+            line = sys.stdin.readline()
+            if line.strip().lower() == 'q':
+                _stop_flag = True
+                break
 
 def test_webcam_fps(resolution=(640, 480), duration=10):
     """
