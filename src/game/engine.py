@@ -14,6 +14,7 @@ class GameState:
     """Enumeration of game states."""
     MENU = "menu"
     SONG_SELECT = "song_select"
+    READY = "ready"          # 준비 화면 (포즈 감지 + OK 사인 대기)
     COUNTDOWN = "countdown"
     PLAYING = "playing"
     PAUSED = "paused"
@@ -70,6 +71,12 @@ class GameEngine:
         # 실루엣 렌더러 (사람 형태 캐릭터)
         self._user_silhouette = None
         self._guide_silhouette = None
+        # READY 상태 관련
+        self._ready_current_frame = None     # 웹캠 프레임
+        self._ready_landmarks = None         # 포즈 랜드마크
+        self._ready_pose_detected = False
+        self._ready_full_body_start: float = 0.0  # 전신 감지 시작 시각
+        self._ready_countdown: float = 0.0        # 전신 감지 후 카운트다운 (초)
 
     def initialize(self):
         """
@@ -151,33 +158,66 @@ class GameEngine:
 
     @staticmethod
     def _load_fonts(pygame):
-        """한국어 지원 폰트를 로드합니다. 파일 경로 → SysFont 순으로 fallback."""
+        """한국어 지원 폰트를 로드합니다.
+        우선순위: ① 프로젝트 번들 폰트 → ② 시스템 경로 → ③ SysFont fallback
+        번들 폰트(assets/fonts/NotoSansKR.ttf)를 git에 포함시켜
+        어떤 OS/환경에서도 한글이 깨지지 않도록 합니다.
+        """
         import os
 
-        # 우선순위 폰트 파일 목록 (라즈베리파이 Noto CJK 경로)
-        candidates = [
+        # ① 프로젝트 번들 폰트 (engine.py → src/game → src → project/assets/fonts)
+        try:
+            engine_dir   = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(os.path.dirname(engine_dir))
+            bundle_font  = os.path.join(project_root, "assets", "fonts", "NotoSansKR.ttf")
+        except Exception:
+            bundle_font = ""
+
+        # ② 시스템 경로 후보 (라즈베리파이 / 우분투 / macOS / Windows)
+        system_candidates = [
+            # Linux (Raspberry Pi, Ubuntu)
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/opentype/noto/NotoSansCJKkr-Regular.otf",
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+            # macOS
+            "/Library/Fonts/NotoSansKR-Regular.otf",
+            "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+            # Windows
+            "C:/Windows/Fonts/malgun.ttf",       # 맑은 고딕
+            "C:/Windows/Fonts/gulim.ttc",         # 굴림
         ]
+
         font_path = None
-        for p in candidates:
-            if os.path.exists(p):
-                font_path = p
-                break
+        # 번들 폰트 우선
+        if os.path.exists(bundle_font):
+            font_path = bundle_font
+            print(f"[FONT] 번들 폰트 사용: {bundle_font}")
+        else:
+            for p in system_candidates:
+                if os.path.exists(p):
+                    font_path = p
+                    print(f"[FONT] 시스템 폰트 사용: {p}")
+                    break
+
+        if font_path is None:
+            print("[FONT] 한글 폰트를 찾지 못했습니다. 한글이 깨질 수 있습니다.")
 
         def make(size, bold=False):
             if font_path:
                 try:
                     return pygame.font.Font(font_path, size)
+                except Exception as e:
+                    print(f"[FONT] 폰트 로드 실패 ({font_path}): {e}")
+            # ③ SysFont fallback
+            for name in ["notosanscjkkr", "notosanscjk", "malgun gothic",
+                         "applegothic", "nanum gothic", "sans"]:
+                try:
+                    f = pygame.font.SysFont(name, size, bold=bold)
+                    if f:
+                        return f
                 except Exception:
                     pass
-            # SysFont fallback
-            for name in ["notosanscjkkr", "notosanscjkjp", "notosanscjksc", "sans"]:
-                f = pygame.font.SysFont(name, size, bold=bold)
-                if f:
-                    return f
             return pygame.font.SysFont(None, size)
 
         return {
@@ -297,16 +337,16 @@ class GameEngine:
                 if event.key == pygame.K_ESCAPE:
                     if self.state in (GameState.PLAYING, GameState.PAUSED,
                                       GameState.SETTINGS, GameState.RESULT,
-                                      GameState.COUNTDOWN):
+                                      GameState.COUNTDOWN, GameState.READY):
                         self.transition_to(GameState.MENU)
                     else:
                         self.running = False
 
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                     if self.state == GameState.MENU:
-                        self.transition_to(GameState.COUNTDOWN)
+                        self.transition_to(GameState.READY)
                     elif self.state == GameState.SONG_SELECT:
-                        self.transition_to(GameState.COUNTDOWN)
+                        self.transition_to(GameState.READY)
                     elif self.state == GameState.PAUSED:
                         self.transition_to(GameState.PLAYING)
                     elif self.state == GameState.RESULT:
@@ -378,7 +418,7 @@ class GameEngine:
             songs = self._songs_for_mode(self._current_mode)
             if songs:
                 self._current_song = songs[self._selected_song_idx]
-            self.transition_to(GameState.COUNTDOWN)
+            self.transition_to(GameState.READY)
         elif btn_name.startswith("btn_song_"):
             try:
                 idx = int(btn_name.split("_")[-1])
@@ -399,19 +439,24 @@ class GameEngine:
 
         # ── 결과 화면 버튼 ──
         elif btn_name == "btn_retry":
-            self.transition_to(GameState.COUNTDOWN)
+            self.transition_to(GameState.READY)
         elif btn_name == "btn_result_menu":
             self.transition_to(GameState.MENU)
 
-        # ── 설정/카운트다운 화면 버튼 ──
+        # ── 설정/카운트다운/준비 화면 버튼 ──
         elif btn_name == "btn_back":
             self.transition_to(GameState.MENU)
         elif btn_name == "btn_countdown_cancel":
             self.transition_to(GameState.MENU)
+        elif btn_name == "btn_ready_cancel":
+            self.transition_to(GameState.MENU)
 
     def _update(self):
         """Update game state based on current state."""
-        if self.state == GameState.COUNTDOWN:
+        if self.state == GameState.READY:
+            self._update_ready()
+
+        elif self.state == GameState.COUNTDOWN:
             elapsed = time.time() - self._countdown_start
             remaining = 10 - int(elapsed)
             if remaining < 0:
@@ -432,6 +477,48 @@ class GameEngine:
             self._update_gameplay()
 
         # PAUSED 상태에서는 카메라/포즈 업데이트 중단
+
+    def _update_ready(self):
+        """READY 상태: 웹캠 + 포즈 감지. 발목까지 감지되면 3초 카운트다운 후 시작."""
+        import cv2
+
+        if self._camera is None:
+            return
+
+        ret, frame = self._camera.read()
+        if not ret:
+            return
+
+        frame = cv2.flip(frame, 1)
+        self._ready_current_frame = frame
+
+        result = self._pose_detector.detect(frame)
+        self._ready_landmarks = result["landmarks"]
+        self._ready_pose_detected = result["detected"]
+
+        # 전신(발목) 감지 여부 확인
+        full_body = False
+        if self._ready_pose_detected and self._ready_landmarks is not None:
+            lm = self._ready_landmarks
+            L_ANKLE, R_ANKLE = 27, 28
+            full_body = (lm[L_ANKLE][3] > 0.3 and lm[R_ANKLE][3] > 0.3)
+
+        COUNTDOWN_SEC = 3.0  # 발목 감지 후 대기 시간
+
+        if full_body:
+            if self._ready_full_body_start == 0.0:
+                self._ready_full_body_start = time.time()
+            elapsed = time.time() - self._ready_full_body_start
+            self._ready_countdown = max(0.0, COUNTDOWN_SEC - elapsed)
+            if elapsed >= COUNTDOWN_SEC:
+                # 3초 유지 완료 → 게임 시작
+                self._ready_full_body_start = 0.0
+                self._ready_countdown = 0.0
+                self.transition_to(GameState.COUNTDOWN)
+        else:
+            # 전신 미감지 시 카운트다운 리셋
+            self._ready_full_body_start = 0.0
+            self._ready_countdown = 0.0
 
     def _update_gameplay(self):
         """Capture frame, detect pose, compute score."""
@@ -587,6 +674,8 @@ class GameEngine:
             self._render_menu(w, h)
         elif self.state == GameState.SONG_SELECT:
             self._render_song_select(w, h)
+        elif self.state == GameState.READY:
+            self._render_ready(w, h)
         elif self.state == GameState.COUNTDOWN:
             self._render_countdown(w, h)
         elif self.state == GameState.PLAYING:
@@ -844,6 +933,127 @@ class GameEngine:
             "터치/클릭으로 곡 선택  |  ESC: 뒤로", True, (90, 90, 120)
         )
         self._display.blit(hint, hint.get_rect(center=(w // 2, h - 14)))
+
+    def _render_ready(self, w, h):
+        """준비 화면: 좌=웹캠, 우=스켈레톤 + 전신 감지 안내 + OK 사인 대기."""
+        import pygame
+        import cv2
+
+        MID_X = w // 2
+        HEADER_H = 48
+        FOOTER_H = 44
+
+        # 배경
+        self._display.fill((8, 6, 22))
+        pygame.draw.line(self._display, (50, 45, 90),
+                         (MID_X, HEADER_H), (MID_X, h - FOOTER_H), 2)
+
+        # ── 헤더 ──────────────────────────────────────────────
+        pygame.draw.rect(self._display, (18, 14, 45), pygame.Rect(0, 0, w, HEADER_H))
+        song_title = (self._current_song or {}).get("title", "")
+        hdr = self._fonts["body"].render(
+            f"{'  ' + song_title + '  —  ' if song_title else ''}포즈를 준비해주세요",
+            True, (180, 180, 255))
+        self._display.blit(hdr, hdr.get_rect(center=(w // 2, HEADER_H // 2)))
+
+        body_h = h - HEADER_H - FOOTER_H
+
+        # ── 왼쪽: 웹캠 피드 ──────────────────────────────────
+        pygame.draw.rect(self._display, (12, 10, 30),
+                         pygame.Rect(0, HEADER_H, MID_X, body_h))
+        lbl_cam = self._fonts["small"].render("내 화면", True, (100, 160, 255))
+        self._display.blit(lbl_cam, (12, HEADER_H + 8))
+
+        if self._ready_current_frame is not None:
+            cam_w = MID_X - 20
+            cam_h = int(cam_w * 3 / 4)
+            cam_x = 10
+            cam_y = HEADER_H + (body_h - cam_h) // 2
+            frame_small = cv2.resize(self._ready_current_frame, (cam_w, cam_h),
+                                     interpolation=cv2.INTER_NEAREST)
+            rgb = frame_small[:, :, ::-1]
+            cam_surf = pygame.image.frombuffer(rgb.tobytes(), (cam_w, cam_h), "RGB")
+            pygame.draw.rect(self._display, (40, 40, 70),
+                             pygame.Rect(cam_x - 2, cam_y - 2, cam_w + 4, cam_h + 4),
+                             border_radius=6)
+            self._display.blit(cam_surf, (cam_x, cam_y))
+        else:
+            no_cam = self._fonts["body"].render("카메라 없음", True, (80, 80, 110))
+            self._display.blit(no_cam, no_cam.get_rect(center=(MID_X // 2, HEADER_H + body_h // 2)))
+
+        # ── 오른쪽: 스켈레톤 ─────────────────────────────────
+        pygame.draw.rect(self._display, (10, 8, 28),
+                         pygame.Rect(MID_X, HEADER_H, w - MID_X, body_h))
+        lbl_sk = self._fonts["small"].render("내 스켈레톤", True, (255, 160, 80))
+        self._display.blit(lbl_sk, (MID_X + 12, HEADER_H + 8))
+
+        # 전신 감지 여부 판단
+        full_body_detected = False
+        if self._ready_pose_detected and self._ready_landmarks is not None:
+            lm = self._ready_landmarks
+            ANKLES = [27, 28]
+            full_body_detected = all(lm[i][3] > 0.3 for i in ANKLES)
+
+        if self._ready_pose_detected and self._ready_landmarks is not None:
+            sk_rect = (MID_X, HEADER_H, w - MID_X, body_h)
+            self._draw_stick_figure(
+                self._display,
+                self._ready_landmarks,
+                sk_rect,
+                line_color=(80, 220, 255) if full_body_detected else (200, 120, 60),
+                joint_color=(200, 250, 255) if full_body_detected else (255, 200, 120),
+                line_width=4,
+                joint_radius=6,
+            )
+        else:
+            no_pose = self._fonts["body"].render("포즈 감지 중...", True, (80, 80, 120))
+            self._display.blit(no_pose,
+                               no_pose.get_rect(center=(MID_X + (w - MID_X) // 2,
+                                                        HEADER_H + body_h // 2)))
+
+        # ── 안내 문구 (OK 사인 진행 바 포함) ─────────────────
+        fy = h - FOOTER_H
+        pygame.draw.rect(self._display, (14, 12, 38), pygame.Rect(0, fy, w, FOOTER_H))
+        pygame.draw.line(self._display, (50, 45, 90), (0, fy), (w, fy), 1)
+
+        ok_progress = getattr(self, '_ready_countdown', 0.0)
+        COUNTDOWN_SEC = 3.0
+        full_body_start = getattr(self, '_ready_full_body_start', 0.0)
+        is_counting = full_body_start > 0.0
+
+        if not self._ready_pose_detected:
+            msg = "카메라 앞에 서 주세요!"
+            msg_color = (200, 150, 80)
+        elif not full_body_detected:
+            msg = "몸 전체가 보일 때까지 뒤로 가주세요!"
+            msg_color = (255, 160, 60)
+        elif is_counting:
+            remaining = max(0.0, ok_progress)
+            msg = f"게임 시작까지  {remaining:.1f}초..."
+            msg_color = (0, 240, 150)
+            # 진행 바 (3초 → 0초, 채워지는 방향)
+            pct = 1.0 - remaining / COUNTDOWN_SEC
+            bar_w = int((w - 40) * pct)
+            pygame.draw.rect(self._display, (0, 50, 30),
+                             pygame.Rect(20, fy + FOOTER_H - 8, w - 40, 5), border_radius=3)
+            pygame.draw.rect(self._display, (0, 240, 150),
+                             pygame.Rect(20, fy + FOOTER_H - 8, bar_w, 5), border_radius=3)
+        else:
+            msg = "전신이 보이면 3초 후 자동으로 시작합니다!"
+            msg_color = (100, 220, 255)
+
+        msg_surf = self._fonts["body"].render(msg, True, msg_color)
+        self._display.blit(msg_surf, msg_surf.get_rect(center=(w // 2, fy + FOOTER_H // 2 - 2)))
+
+        # ── 취소 버튼 ──────────────────────────────────────────
+        cancel_rect = pygame.Rect(w - 110, HEADER_H + 6, 100, 36)
+        self._btn_rects["btn_ready_cancel"] = cancel_rect
+        hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
+        pygame.draw.rect(self._display, (100, 35, 35) if hover else (70, 25, 25),
+                         cancel_rect, border_radius=10)
+        pygame.draw.rect(self._display, (200, 100, 100), cancel_rect, 2, border_radius=10)
+        cancel_lbl = self._fonts["small"].render("취소", True, (255, 200, 200))
+        self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
 
     def _render_countdown(self, w, h):
         """Render countdown screen."""
@@ -1366,6 +1576,18 @@ class GameEngine:
         """Handle setup when entering a new state."""
         if state == GameState.SONG_SELECT:
             self._selected_song_idx = 0
+        elif state == GameState.READY:
+            # 준비 화면 진입 시 상태 초기화
+            self._ready_current_frame = None
+            self._ready_landmarks = None
+            self._ready_pose_detected = False
+            self._ready_full_body_start = 0.0
+            self._ready_countdown = 0.0
+            # READY에서 곡 선택이 아직 안 된 경우 첫 번째 곡 자동 선택
+            if not self._current_song:
+                songs = self._songs_for_mode(self._current_mode)
+                if songs:
+                    self._current_song = songs[self._selected_song_idx]
         elif state == GameState.COUNTDOWN:
             self._countdown_start = time.time()
             self._countdown_timer = 10  # 10초 카운트다운 (워밍업 시간 확보)
