@@ -131,7 +131,9 @@ python src/main.py
 
 ## 기술 스택
 
-- **포즈 추정**: MediaPipe Pose (33개 랜드마크)
+- **포즈 추정**:
+- 1. MediaPipe Pose (33개 랜드마크)
+  2. [movenet](https://www.kaggle.com/models/google/movenet/tensorFlow2/singlepose-lightning/4?tfhub-redirect=true)
 - **임베딩 모델**: ST-GCN (시공간 그래프 합성곱 신경망)
 - **ML 프레임워크**: PyTorch + PyTorch Geometric
 - **게임 UI**: PyGame
