@@ -8,8 +8,15 @@ class AsyncCameraPose:
 
     def __init__(self, camera_idx=0, width=640, height=480, pose_detector=None):
         self._camera = cv2.VideoCapture(camera_idx)
+        
+        # 💡 [초저지연 하드웨어 최적화] - v4l-utils 명령어와 동일한 효과
+        # 웹캠 압축 포맷을 가장 빠르고 대역폭이 넓은 MJPG로 강제 지정하고 버퍼를 1로 줄입니다.
+        # (YUYV 포맷 대비 USB 병목이 해소되어 극단적으로 딜레이가 줄어듦)
+        self._camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         self._camera.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self._camera.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self._camera.set(cv2.CAP_PROP_FPS, 30)
+        self._camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         self._pose_detector = pose_detector
 
