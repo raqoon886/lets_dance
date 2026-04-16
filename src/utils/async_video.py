@@ -76,16 +76,19 @@ class AsyncVideoPlayer:
                 if frames_to_skip > 10:
                     self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_fi)
                     self._current_frame_idx = target_fi
-                else:
-                    # 필요한 만큼 징검다리 스킵
+                    
+                # 타겟 프레임 도달 전까지 불필요한 프레임 스킵
+                if frames_to_skip > 0 and frames_to_skip <= 10:
                     for _ in range(frames_to_skip):
                         self.cap.grab()
                         self._current_frame_idx += 1
                         
-                # 최종 화면 1장 디코딩 (I/O 부하)
-                ret, frame = self.cap.retrieve()
+                # 최종 타겟 프레임 1장 디코딩 및 RGB 변환
+                ret, frame = self.cap.read()
+                self._current_frame_idx += 1
+                
                 if ret:
-                    # 여기서 메인 스레드가 해야 할 무거운 리사이즈와 색 변환을 몽땅 처리
+                    # 여기서 메인 스레드가 해야 할 무거운 리사이즈와 색 변환을 모두 처리
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     if self.target_size:
                         frame_rgb = cv2.resize(frame_rgb, self.target_size)
