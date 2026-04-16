@@ -60,6 +60,10 @@ class ScratchPoseSimilarity:
         self._interpreter = interpreter
         self._input_details = None
         self._output_details = None
+        self._precomputed_ref_embeddings = None
+        self._precomputed_ref_index_to_pos = {}
+        self._precomputed_ref_meta = None
+        self._precomputed_ref_path = None
 
         if interpreter is None:
             self._load_interpreter()
@@ -70,6 +74,14 @@ class ScratchPoseSimilarity:
         """Clear rolling user window and cached reference embeddings."""
         self._user_buffer.clear()
         self._ref_embedding_cache.clear()
+        self.clear_reference_embedding_cache()
+
+    def clear_reference_embedding_cache(self):
+        """Clear the disk-backed reference embedding cache for the current song."""
+        self._precomputed_ref_embeddings = None
+        self._precomputed_ref_index_to_pos = {}
+        self._precomputed_ref_meta = None
+        self._precomputed_ref_path = None
 
     def compute(self, user_landmarks: np.ndarray, reference_sequence: np.ndarray,
                 reference_index: int, tolerance_frames: int = 0):
@@ -91,12 +103,16 @@ class ScratchPoseSimilarity:
         if not candidate_indices:
             return None
 
-        user_embedding = self._infer_single(user_window)
-        sims = [
-            self._cosine_similarity(user_embedding, self._reference_embedding(
-                reference_sequence, end_idx))
-            for end_idx in candidate_indices
-        ]
+        user_embedding = self._normalize_vector(self._infer_single(user_window))
+        ref_embeddings = self._reference_embeddings(reference_sequence, candidate_indices)
+        if ref_embeddings is not None:
+            sims = np.dot(ref_embeddings, user_embedding)
+        else:
+            sims = [
+                self._cosine_similarity(user_embedding, self._reference_embedding(
+                    reference_sequence, end_idx))
+                for end_idx in candidate_indices
+            ]
         sims = [float(np.clip(s, 0.0, 1.0)) for s in sims if np.isfinite(s)]
         if not sims:
             return 0.0
@@ -155,6 +171,8 @@ class ScratchPoseSimilarity:
         """Pre-compute reference embeddings (background thread friendly)."""
         if reference_sequence is None:
             return
+        if self._precomputed_ref_embeddings is not None:
+            return
             
         total_frames = len(reference_sequence)
         start = self.sequence_length - 1
@@ -188,6 +206,97 @@ class ScratchPoseSimilarity:
                 
         threading.Thread(target=_task, daemon=True, name="tflite-warmup").start()
 
+    def load_reference_embedding_cache(self, cache_dir, dance_name, model_kind,
+                                       model_name, reference_path=None):
+        """Load a precomputed per-song reference embedding .npz cache.
+
+        Returns True when a compatible cache was loaded. If no cache is found or
+        metadata does not match the current encoder settings, returns False and
+        leaves the comparator in fallback mode.
+        """
+        self.clear_reference_embedding_cache()
+        cache_dir = os.path.abspath(cache_dir)
+        if not os.path.isdir(cache_dir):
+            return False
+
+        prefix = (
+            f"{dance_name}__{model_kind}__{model_name}"
+            f"__seq{self.sequence_length}_fd{self.feature_dims}_{self.input_layout}_stride"
+        )
+        candidates = []
+        for filename in os.listdir(cache_dir):
+            if not filename.startswith(prefix) or not filename.endswith(".npz"):
+                continue
+            path = os.path.join(cache_dir, filename)
+            try:
+                with np.load(path, allow_pickle=True) as data:
+                    meta = json.loads(str(data["metadata"]))
+                stride = int(meta.get("cache_stride", 10**9))
+                candidates.append((stride, path, meta))
+            except Exception as exc:
+                print(f"[WARN] Invalid reference embedding cache ignored: {path} ({exc})")
+
+        if not candidates:
+            return False
+
+        candidates.sort(key=lambda item: item[0])
+        for _, path, meta in candidates:
+            if not self._is_compatible_reference_cache(
+                    meta, dance_name, model_kind, model_name, reference_path):
+                continue
+            try:
+                with np.load(path, allow_pickle=True) as data:
+                    end_indices = data["end_indices"].astype(np.int32)
+                    embeddings = data["embeddings"].astype(np.float32)
+                    if "metadata" in data:
+                        meta = json.loads(str(data["metadata"]))
+                if embeddings.ndim != 2 or len(end_indices) != len(embeddings):
+                    raise ValueError(
+                        f"Invalid shapes: end_indices={end_indices.shape}, "
+                        f"embeddings={embeddings.shape}"
+                    )
+                norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+                embeddings = embeddings / np.maximum(norms, 1e-8)
+                self._precomputed_ref_embeddings = embeddings.astype(np.float32)
+                self._precomputed_ref_index_to_pos = {
+                    int(end_idx): int(pos) for pos, end_idx in enumerate(end_indices)
+                }
+                self._precomputed_ref_meta = meta
+                self._precomputed_ref_path = path
+                self._ref_embedding_cache.clear()
+                print(
+                    "[INFO] Reference embedding cache loaded: "
+                    f"{os.path.basename(path)} "
+                    f"({embeddings.shape[0]} windows, dim={embeddings.shape[1]})"
+                )
+                return True
+            except Exception as exc:
+                print(f"[WARN] Failed to load reference embedding cache: {path} ({exc})")
+        return False
+
+    def _is_compatible_reference_cache(self, meta, dance_name, model_kind,
+                                       model_name, reference_path=None):
+        if meta.get("dance_name") != dance_name:
+            return False
+        if meta.get("model_kind") != model_kind:
+            return False
+        if meta.get("model_name") != model_name:
+            return False
+        if int(meta.get("sequence_length", -1)) != self.sequence_length:
+            return False
+        if int(meta.get("feature_dims", -1)) != self.feature_dims:
+            return False
+        if meta.get("input_layout") != self.input_layout:
+            return False
+        cached_joints = [int(j) for j in meta.get("target_joints", [])]
+        if cached_joints and cached_joints != [int(j) for j in self.target_joints]:
+            return False
+        if reference_path:
+            cached_path = meta.get("reference_path")
+            if cached_path and os.path.basename(cached_path) != os.path.basename(reference_path):
+                return False
+        return True
+
     def _reference_window(self, reference_sequence, end_idx):
         return build_pose_window(
             reference_sequence,
@@ -198,12 +307,35 @@ class ScratchPoseSimilarity:
         )
 
     def _reference_embedding(self, reference_sequence, end_idx):
+        cached = self._lookup_precomputed_reference_embedding(end_idx)
+        if cached is not None:
+            return cached
         cached = self._ref_embedding_cache.get(end_idx)
         if cached is not None:
             return cached
-        embedding = self._infer_single(self._reference_window(reference_sequence, end_idx))
+        embedding = self._normalize_vector(
+            self._infer_single(self._reference_window(reference_sequence, end_idx)))
         self._ref_embedding_cache[end_idx] = embedding
         return embedding
+
+    def _reference_embeddings(self, reference_sequence, end_indices):
+        if self._precomputed_ref_embeddings is None:
+            return None
+        positions = []
+        for end_idx in end_indices:
+            pos = self._precomputed_ref_index_to_pos.get(int(end_idx))
+            if pos is None:
+                return None
+            positions.append(pos)
+        return self._precomputed_ref_embeddings[np.asarray(positions, dtype=np.int32)]
+
+    def _lookup_precomputed_reference_embedding(self, end_idx):
+        if self._precomputed_ref_embeddings is None:
+            return None
+        pos = self._precomputed_ref_index_to_pos.get(int(end_idx))
+        if pos is None:
+            return None
+        return self._precomputed_ref_embeddings[pos]
 
     def _infer_single(self, sequence):
         detail = self._input_details[0]
@@ -266,10 +398,16 @@ class ScratchPoseSimilarity:
 
     @staticmethod
     def _cosine_similarity(a, b):
-        a = np.nan_to_num(np.asarray(a, dtype=np.float32))
-        b = np.nan_to_num(np.asarray(b, dtype=np.float32))
-        norm_a = np.linalg.norm(a)
-        norm_b = np.linalg.norm(b)
-        if norm_a < 1e-8 or norm_b < 1e-8:
+        a = ScratchPoseSimilarity._normalize_vector(a)
+        b = ScratchPoseSimilarity._normalize_vector(b)
+        if np.linalg.norm(a) < 1e-8 or np.linalg.norm(b) < 1e-8:
             return 0.0
-        return float(np.dot(a, b) / (norm_a * norm_b))
+        return float(np.dot(a, b))
+
+    @staticmethod
+    def _normalize_vector(vector):
+        vector = np.nan_to_num(np.asarray(vector, dtype=np.float32).reshape(-1))
+        norm = np.linalg.norm(vector)
+        if norm < 1e-8:
+            return vector
+        return vector / norm
