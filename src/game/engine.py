@@ -38,6 +38,7 @@ class GameEngine:
         self._camera = None
         self._pose_detector = None
         self._embedding_extractor = None
+        self._embedding_comparator = None
         self._scratch_comparator = None
         self._warned_scratch_no_ref = False
         self._scorer = None
@@ -177,13 +178,32 @@ class GameEngine:
             self._tolerance_delay = self.config.get("tolerance_delay", 1.0)
             print(f"[INFO] Score method: scratch ({model_name}: {model_path}, tolerance {self._tolerance_delay}s)")
         else:
-            # embedding 모드: ST-GCN 임베딩 + SimilarityCalculator
-            from scoring.similarity import SimilarityCalculator
-            self._similarity_calc = SimilarityCalculator(metric="sliding_window", window_size=15)
+            # embedding: fine-tuned TFLite encoder + cosine similarity.
+            from scoring.scratch_similarity import (
+                ScratchPoseSimilarity,
+                resolve_scratch_model_path,
+            )
+            embedding_cfg = self.config.get("embedding", {})
+            model_dir = embedding_cfg.get("model_dir", "data/models/embedding")
+            model_name = embedding_cfg.get("model_name", "dance_embedding")
+            model_path = resolve_scratch_model_path(
+                model_name=model_name,
+                model_dir=model_dir,
+                model_path=embedding_cfg.get("model_path"),
+            )
+            self._embedding_comparator = ScratchPoseSimilarity(
+                model_path=model_path,
+                sequence_length=embedding_cfg.get("sequence_length", 30),
+                feature_dims=embedding_cfg.get("feature_dims", 2),
+                input_layout=embedding_cfg.get("input_layout", "BTJC"),
+                top_k=embedding_cfg.get("top_k", 3),
+                candidate_stride=embedding_cfg.get("candidate_stride", 3),
+            )
             self._pose_comparator = None
-            # TODO: EmbeddingExtractor 초기화 (모델 학습 완료 후)
             self._embedding_extractor = None
-            print(f"[INFO] Score method: embedding (ST-GCN + sliding window cosine)")
+            self._similarity_method = "embedding"
+            self._tolerance_delay = self.config.get("tolerance_delay", 1.0)
+            print(f"[INFO] Score method: embedding ({model_name}: {model_path}, tolerance {self._tolerance_delay}s)")
 
         # ── 폰트 로드 (한국어 지원: NotoSansCJK → fallback SysFont) ──
         self._fonts = self._load_fonts(pygame)
@@ -945,15 +965,21 @@ class GameEngine:
                     if sim is None:
                         return
                 else:
-                    # embedding: ST-GCN 임베딩 비교 (TODO: 구현 후 연결)
-                    # 현재는 fallback으로 detection confidence 사용
-                    visibility = self._current_landmarks[:, 3]
-                    mean_vis = float(np.mean(visibility[visibility > 0]))
-                    sim = min(mean_vis, 1.0)
+                    # embedding: compare recent user motion window with
+                    # reference windows through a fine-tuned TFLite encoder.
+                    tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
+                    sim = self._embedding_comparator.compute(
+                        self._current_landmarks,
+                        self._ref_landmarks,
+                        self._ref_current_idx,
+                        tolerance_frames=tolerance_frames,
+                    )
+                    if sim is None:
+                        return
             else:
-                if self._score_method == "scratch":
+                if self._score_method in ("scratch", "embedding"):
                     if not self._warned_scratch_no_ref:
-                        print("[WARN] scratch scoring requires reference.npy; scoring paused.")
+                        print(f"[WARN] {self._score_method} scoring requires reference.npy; scoring paused.")
                         self._warned_scratch_no_ref = True
                     return
                 # 레퍼런스 없으면 detection confidence로 대체
@@ -2163,11 +2189,16 @@ class GameEngine:
         elif state == GameState.PLAYING:
             # PAUSED→PLAYING 복귀인 경우에만 세션 유지
             resuming_from_pause = getattr(self, '_prev_state', None) == GameState.PAUSED
-            if not resuming_from_pause:
+            if resuming_from_pause:
+                import pygame
+                pygame.mixer.music.unpause()
+            else:
                 # 새 게임 시작: 이전 세션 완전 정리
                 if self._current_session is not None:
                     self._current_session.is_active = False
                     self._current_session = None
+                import pygame
+                pygame.mixer.music.stop()
                 self._scorer.reset()
                 self._last_feedback = None
                 self._feedback_timer = 0.0
@@ -2175,6 +2206,8 @@ class GameEngine:
                 self._pose_detected = False
                 if self._scratch_comparator is not None:
                     self._scratch_comparator.reset()
+                if self._embedding_comparator is not None:
+                    self._embedding_comparator.reset()
                 self._warned_scratch_no_ref = False
                 # 참조 랜드마크 로드
                 self._ref_landmarks = None
@@ -2237,6 +2270,22 @@ class GameEngine:
                             print(f"[INFO] 레퍼런스 영상 로드: {video_path} "
                                   f"({self._ref_video_fps:.1f}fps, "
                                   f"resize→{self._ref_video_size})")
+
+                            # 오디오 추출 및 플레이 (pygame mixer는 mp3/ogg를 지원함)
+                            import subprocess
+                            import pygame
+                            audio_path = video_path.rsplit('.', 1)[0] + ".mp3"
+                            if not os.path.exists(audio_path):
+                                print(f"[INFO] 비디오에서 오디오 추출 중: {audio_path}")
+                                subprocess.run(["ffmpeg", "-y", "-i", video_path, "-q:a", "0", "-map", "a", audio_path], capture_output=True)
+                            
+                            if os.path.exists(audio_path):
+                                try:
+                                    pygame.mixer.music.load(audio_path)
+                                    pygame.mixer.music.play()
+                                except Exception as e:
+                                    print(f"[WARN] 오디오 재생 실패: {e}")
+
                         else:
                             print(f"[WARN] 레퍼런스 영상 없음: {video_path}")
                 from game.session import GameSession
@@ -2252,7 +2301,8 @@ class GameEngine:
                 self._current_session.start()
         elif state == GameState.PAUSED:
             # 일시정지 — 현재 세션 타이머는 계속 흐름 (추후 개선 가능)
-            pass
+            import pygame
+            pygame.mixer.music.pause()
         elif state == GameState.RESULT:
             self._result_data = self._scorer.get_final_result()
 

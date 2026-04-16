@@ -237,22 +237,26 @@ def run_movenet(input_path: str, tmp_output_path: str) -> np.ndarray:
 # ffmpeg 후처리 압축
 # ══════════════════════════════════════════════════════════════════════════════
 
-def compress_video(tmp_path: str, final_path: str, crf: int = 28):
+def compress_video(tmp_path: str, final_path: str, orig_path: str, crf: int = 28):
     """
     ffmpeg으로 tmp_path → final_path 로 H.264/AAC 압축.
+    원본 영상(orig_path)에서 오디오를 추출하여 결과물에 포함합니다.
     CRF 값이 클수록 압축률↑ (품질↓). 일반적으로 23~28 권장.
     """
     cmd = [
         "ffmpeg", "-y",
         "-i", tmp_path,
-        "-vcodec", "libx264",
+        "-i", orig_path,
+        "-c:v", "libx264",
         "-crf", str(crf),
         "-preset", "fast",
         "-pix_fmt", "yuv420p",
-        "-an",          # 오디오 없음 (실루엣 영상은 무음)
+        "-c:a", "aac",  # AAC 코덱으로 오디오 인코딩 (또는 copy)
+        "-map", "0:v:0",  # 첫 번째 입력(tmp_path)에서 비디오 가져오기
+        "-map", "1:a:0?",  # 두 번째 입력(orig_path)에서 오디오 가져오기 (오디오가 없어도 에러 무시)
         final_path
     ]
-    print(f"[ffmpeg] Compressing: {tmp_path} → {final_path} (CRF={crf})")
+    print(f"[ffmpeg] Compressing: {tmp_path} → {final_path} (CRF={crf}, Audio included)")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print("[ffmpeg] 압축 실패, 원본 tmp 파일을 그대로 사용합니다.")
@@ -306,7 +310,7 @@ def main():
         landmarks = run_movenet(input_video, tmp_video)
 
     # ── ffmpeg 압축 ──────────────────────────────────────────────────────────
-    compress_video(tmp_video, output_video, crf=args.crf)
+    compress_video(tmp_video, output_video, input_video, crf=args.crf)
 
     # ── NumPy 저장 ───────────────────────────────────────────────────────────
     np.save(output_npy, landmarks)

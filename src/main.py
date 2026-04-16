@@ -62,6 +62,20 @@ def main():
                         help="scratch TFLite 입력 layout")
     parser.add_argument("--scratch-candidate-stride", type=int, default=None,
                         help="정답 후보 window stride")
+    parser.add_argument("--embedding-model-name", type=str, default=None,
+                        help="embedding 모드에서 사용할 fine-tuned registry 모델명")
+    parser.add_argument("--embedding-model-dir", type=str, default=None,
+                        help="embedding 모델 registry와 .tflite가 있는 디렉터리")
+    parser.add_argument("--embedding-model-path", type=str, default=None,
+                        help="registry를 거치지 않고 직접 사용할 embedding .tflite 경로")
+    parser.add_argument("--embedding-sequence-length", type=int, default=None,
+                        help="embedding 모델 입력 window 길이")
+    parser.add_argument("--embedding-feature-dims", type=int, choices=[2, 3, 4], default=None,
+                        help="embedding 모델 joint feature dimension: 2=xy, 3=xyz, 4=xyzv")
+    parser.add_argument("--embedding-input-layout", choices=["BTJC", "BJTC", "BTC"], default=None,
+                        help="embedding TFLite 입력 layout")
+    parser.add_argument("--embedding-candidate-stride", type=int, default=None,
+                        help="embedding 정답 후보 window stride")
     args = parser.parse_args()
 
     # Direct Compare 모드
@@ -87,6 +101,20 @@ def main():
     }
     config["scratch"].update({
         key: value for key, value in scratch_updates.items()
+        if value is not None
+    })
+    config.setdefault("embedding", {})
+    embedding_updates = {
+        "model_name": args.embedding_model_name,
+        "model_dir": args.embedding_model_dir,
+        "model_path": args.embedding_model_path,
+        "sequence_length": args.embedding_sequence_length,
+        "feature_dims": args.embedding_feature_dims,
+        "input_layout": args.embedding_input_layout,
+        "candidate_stride": args.embedding_candidate_stride,
+    }
+    config["embedding"].update({
+        key: value for key, value in embedding_updates.items()
         if value is not None
     })
     engine = GameEngine(config)

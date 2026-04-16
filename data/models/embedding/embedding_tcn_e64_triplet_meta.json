@@ -1,0 +1,214 @@
+{
+  "created_at": "2026-04-16 10:32:27",
+  "model_name": "embedding_tcn_e64_triplet",
+  "runtime_score_method": "embedding",
+  "runtime_output_mode": "embedding",
+  "input_layout": "BTJC",
+  "input_shape": [
+    1,
+    30,
+    12,
+    2
+  ],
+  "output_shape": [
+    1,
+    64
+  ],
+  "target_joints": [
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28
+  ],
+  "pretrained_encoder": "data/models/pretrain/mpose2021/mpose2021_tcn_e64_triplet_encoder.keras",
+  "encoder_config": {
+    "sequence_length": 30,
+    "num_joints": 12,
+    "feature_dims": 2,
+    "embedding_dim": 64
+  },
+  "config": {
+    "data_dir": "/workspace/users/yijin/boot_env/pjt_main/data/reference_dances",
+    "pretrained_encoder": "/workspace/users/yijin/boot_env/pjt_main/data/models/pretrain/mpose2021/mpose2021_tcn_e64_triplet_encoder.keras",
+    "model_name": "embedding_tcn_e64_triplet",
+    "model_type": "gcn",
+    "output_dir": "/workspace/users/yijin/boot_env/pjt_main/data/models/embedding",
+    "output": null,
+    "keras_output": null,
+    "metadata_output": null,
+    "sequence_length": 30,
+    "feature_dims": 2,
+    "embedding_dim": null,
+    "filters": 64,
+    "blocks": 3,
+    "kernel_size": 3,
+    "dropout": 0.15,
+    "epochs": 30,
+    "batch_size": 32,
+    "steps_per_epoch": 60,
+    "validation_steps": 10,
+    "patience": 5,
+    "learning_rate": 0.0005,
+    "loss_type": "triplet",
+    "triplet_margin": 0.2,
+    "positive_jitter": 6,
+    "negative_gap": 600,
+    "noise_std": 0.015,
+    "seed": 42,
+    "no_quantize": false,
+    "dry_run": false,
+    "rebuild_from_scratch": false
+  },
+  "references": [
+    {
+      "name": "beginner_wave",
+      "path": "data/reference_dances/beginner_wave/reference.npy",
+      "frames": 1800
+    },
+    {
+      "name": "hiphop_move",
+      "path": "data/reference_dances/hiphop_move/reference.npy",
+      "frames": 792
+    },
+    {
+      "name": "kpop_basic",
+      "path": "data/reference_dances/kpop_basic/reference.npy",
+      "frames": 2700
+    },
+    {
+      "name": "cheerup_dance",
+      "path": "data/reference_dances/cheerup_dance/reference.npy",
+      "frames": 724
+    },
+    {
+      "name": "freestyle_free",
+      "path": "data/reference_dances/freestyle_free/reference.npy",
+      "frames": 3600
+    }
+  ],
+  "history": {
+    "loss": [
+      0.025962891057133675,
+      0.014554780907928944,
+      0.011652418412268162,
+      0.009604326449334621,
+      0.009958351030945778,
+      0.006926663685590029,
+      0.009196554310619831,
+      0.008259057067334652,
+      0.008549543097615242,
+      0.007022298872470856,
+      0.0070848045870661736,
+      0.006921867839992046,
+      0.0036849549505859613,
+      0.005139047745615244,
+      0.0034554400481283665
+    ],
+    "positive_margin": [
+      0.5586090087890625,
+      0.6777539849281311,
+      0.7027272582054138,
+      0.7226356267929077,
+      0.7450247406959534,
+      0.8000087738037109,
+      0.7640154957771301,
+      0.7455334067344666,
+      0.7665634751319885,
+      0.8200896978378296,
+      0.800671398639679,
+      0.8018587827682495,
+      0.8008107542991638,
+      0.8219301700592041,
+      0.8126665949821472
+    ],
+    "val_loss": [
+      0.02671648934483528,
+      0.013437172397971153,
+      0.004878470208495855,
+      0.0034705668222159147,
+      0.003295027883723378,
+      0.006554917898029089,
+      0.009379597380757332,
+      0.005959021858870983,
+      0.003175608813762665,
+      0.0006610779091715813,
+      0.004717378877103329,
+      0.005368518643081188,
+      0.002812523627653718,
+      0.0018179453909397125,
+      0.0022775125689804554
+    ],
+    "val_positive_margin": [
+      0.4121636748313904,
+      0.704304575920105,
+      0.7397888898849487,
+      0.8381527662277222,
+      0.8820581436157227,
+      0.8680350184440613,
+      0.7883299589157104,
+      0.796533465385437,
+      0.8151389956474304,
+      0.9252240061759949,
+      0.8491255640983582,
+      0.824343204498291,
+      0.8997446298599243,
+      0.908342182636261,
+      0.843050479888916
+    ],
+    "val_violation_rate": [
+      0.26875001192092896,
+      0.13124999403953552,
+      0.08749999850988388,
+      0.04374999925494194,
+      0.01875000074505806,
+      0.02812499925494194,
+      0.05937499925494194,
+      0.04062499850988388,
+      0.03437500074505806,
+      0.0062500000931322575,
+      0.03125,
+      0.03437500074505806,
+      0.01875000074505806,
+      0.015625,
+      0.02500000037252903
+    ],
+    "violation_rate": [
+      0.17760416865348816,
+      0.10260416567325592,
+      0.07968749850988388,
+      0.07395832985639572,
+      0.06562499701976776,
+      0.05416666716337204,
+      0.0625,
+      0.05364583432674408,
+      0.05781250074505806,
+      0.05156249925494194,
+      0.05000000074505806,
+      0.046875,
+      0.03697916492819786,
+      0.04531250149011612,
+      0.03125
+    ]
+  },
+  "training_summary": {
+    "monitor": "val_loss",
+    "restore_best_weights": true,
+    "epochs_ran": 15,
+    "best_epoch": 10,
+    "best_val_loss": 0.0006610779091715813,
+    "best_epoch_loss": 0.007022298872470856
+  },
+  "smoke_metrics": {
+    "same_cosine_mean": 0.9567237771116197,
+    "different_cosine_mean": -0.029948116512969136,
+    "margin_mean": 0.9866718936245888
+  }
+}
