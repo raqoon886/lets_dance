@@ -96,8 +96,6 @@ class AsyncVideoPlayer:
                     # 스레드 안전하게 최신 프레임 갱신
                     with self.lock:
                         self._latest_frame_rgb = frame_rgb
-                
-                self._current_frame_idx += 1
             else:
                 # 다음 프레임이 올 때까지 휴식 (CPU 절약)
                 time.sleep(0.005)
