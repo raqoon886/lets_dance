@@ -1083,53 +1083,14 @@ class GameEngine:
             self._ref_frame_landmarks = self._ref_landmarks[fi]
             self._ref_current_idx = fi
 
-        # 레퍼런스 영상 프레임 동기화 (영상 fps 기준)
-        if self._ref_video_cap is not None and self._current_session:
-            # pygame.mixer의 실제 오디오 재생 위치를 사용하여 정확도 극대화
-            import pygame
-            elapsed_sys = self._current_session.elapsed_time
-            if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
-                pos_ms = pygame.mixer.music.get_pos()
-                if pos_ms >= 0:
-                    # 마이너스 지연(오프셋)을 주어 영상이 소리보다 살짝 늦게(느리게) 렌더링되게 보정
-                    # 오디오 하드웨어 버퍼와 OS 전달 시간의 차이를 보정하는 리듬 게임 필수 로직
-                    audio_latency = self.config.get("audio", {}).get("latency_offset", 0.040)
-                    elapsed_sys = (pos_ms / 1000.0) - audio_latency
-                    if elapsed_sys < 0: elapsed_sys = 0.0
-
-            video_fi = int(elapsed_sys * self._ref_video_fps)
-            total_video_frames = int(self._ref_video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            
-            if video_fi < total_video_frames:
-                current_pos = int(self._ref_video_cap.get(cv2.CAP_PROP_POS_FRAMES))
-
-                # 오차(frames_to_skip)가 발생하면 동기화를 위해 스킵
-                frames_to_skip = video_fi - current_pos
-                if frames_to_skip < 0 or frames_to_skip > 10:
-                    # 너무 멀면 seek (상당히 느림)
-                    self._ref_video_cap.set(cv2.CAP_PROP_POS_FRAMES, video_fi)
-                else:
-                    # 목표 프레임(video_fi)의 바로 앞 컷까지 건너뜀 (grab이 빠름)
-                    while current_pos < video_fi:
-                        self._ref_video_cap.grab()
-                        current_pos += 1
-
-                vret, vframe = self._ref_video_cap.read()
-                if vret:
-                    self._ref_video_frame = vframe
-                    tw, th = self._ref_video_size
-                    if tw > 0 and th > 0:
-                        small = cv2.resize(vframe, (tw, th),
-                                           interpolation=cv2.INTER_NEAREST)
-                        # BGR→RGB + pygame Surface (frombuffer가 swapaxes보다 빠름)
-                        rgb = small[:, :, ::-1]
-                        import pygame
-                        self._ref_video_surf = pygame.image.frombuffer(
-                            rgb.tobytes(), (tw, th), "RGB")
-                    else:
-                        self._ref_video_surf = None
+        # 레퍼런스 영상 프레임 역재생 비동기 동기화 (Background 스레드에서 무거운 디코딩/리사이즈 전담)
+        if getattr(self, '_async_video_player', None) is not None and self._current_session:
+            vframe_rgb = self._async_video_player.get_latest_frame()
+            if vframe_rgb is not None:
+                th, tw = vframe_rgb.shape[:2]
+                import pygame
+                self._ref_video_surf = pygame.image.frombuffer(vframe_rgb.tobytes(), (tw, th), "RGB")
             else:
-                self._ref_video_frame = None
                 self._ref_video_surf = None
 
         # Score based on pose similarity. scoring_landmarks may be a held pose
@@ -2013,7 +1974,7 @@ class GameEngine:
         # ══════════════════════════════════════════════════════
         pygame.draw.rect(self._display, (10, 6, 22), right_rect)
 
-        has_video = self._ref_video_cap is not None
+        has_video = getattr(self, '_async_video_player', None) is not None
 
         if has_video and self._ref_video_surf is not None:
             vx, vy = self._ref_video_pos
@@ -2791,9 +2752,9 @@ class GameEngine:
                 # 재생 바를 0초로 돌리기
                 self._ref_frame_landmarks = None
                 self._ref_video_frame = None
-                if getattr(self, '_ref_video_cap', None) is not None:
-                    import cv2 as _cv2
-                    self._ref_video_cap.set(_cv2.CAP_PROP_POS_FRAMES, 0)
+                if getattr(self, '_async_video_player', None) is not None:
+                    self._async_video_player.reset_position()
+                    self._async_video_player.start()
                     
                 if getattr(self, '_audio_path', None) and os.path.exists(self._audio_path):
                     try:
@@ -2926,10 +2887,11 @@ class GameEngine:
         """이전 곡의 리소스를 해제합니다."""
         self._ref_landmarks = None
         self._ref_frame_landmarks = None
-        if getattr(self, '_ref_video_cap', None) is not None:
-            self._ref_video_cap.release()
-            self._ref_video_cap = None
-        self._ref_video_frame = None
+        if getattr(self, '_async_video_player', None) is not None:
+            self._async_video_player.stop()
+            self._async_video_player = None
+        self._ref_video_surf = None
+        self._ref_video_size = None
         self._audio_path = None
 
     def _load_reference_assets(self):
@@ -3003,10 +2965,12 @@ class GameEngine:
                     video_path = os.path.join(os.getcwd(), video_rel)
                 
                 if os.path.exists(video_path):
-                    self._ref_video_cap = _cv2.VideoCapture(video_path)
+                    import cv2 as _cv2
+                    cap = _cv2.VideoCapture(video_path)
+                    
                     self._ref_video_fps = self._current_song.get(
                         "video_fps",
-                        self._ref_video_cap.get(_cv2.CAP_PROP_FPS) or 30.0,
+                        cap.get(_cv2.CAP_PROP_FPS) or 30.0,
                     )
                     
                     # 영상 리사이즈 크기 미리 계산 
@@ -3017,8 +2981,13 @@ class GameEngine:
                     FOOTER_H = 44
                     rp_w = disp_w - disp_w // 2
                     rp_h = disp_h - HEADER_H - FOOTER_H
-                    vid_w = int(self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
-                    vid_h = int(self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
+
+                    total_frames = cap.get(_cv2.CAP_PROP_FRAME_COUNT)
+                    vid_w = int(cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
+                    vid_h = int(cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
+
+                    cap.release()
+
                     if vid_w > 0 and vid_h > 0:
                         vscale = min(rp_w / vid_w, rp_h / vid_h)
                         tw, th = int(vid_w * vscale), int(vid_h * vscale)
@@ -3026,6 +2995,24 @@ class GameEngine:
                         self._ref_video_pos = (
                             disp_w // 2 + (rp_w - tw) // 2,
                             HEADER_H + (rp_h - th) // 2,
+                        )
+                        
+                        # [AsyncVideoPlayer 초기화 및 적용]
+                        from utils.async_video import AsyncVideoPlayer
+                        
+                        def _get_audio_time():
+                            import pygame
+                            if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
+                                pm = pygame.mixer.music.get_pos()
+                                return (pm / 1000.0) if pm >= 0 else 0.0
+                            return None
+                            
+                        audio_latency = self.config.get("audio", {}).get("latency_offset", 0.040)
+                        self._async_video_player = AsyncVideoPlayer(
+                            video_path=video_path,
+                            target_size=self._ref_video_size,
+                            audio_latency_offset=audio_latency,
+                            time_func=_get_audio_time
                         )
 
                     # 오디오 추출 및 프리로드 (Ogg Vorbis)
@@ -3046,9 +3033,9 @@ class GameEngine:
         self.running = False
         if getattr(self, '_async_camera', None) is not None:
             self._async_camera.stop()
-        if self._ref_video_cap is not None:
-            self._ref_video_cap.release()
-            self._ref_video_cap = None
+        if getattr(self, '_async_video_player', None):
+            self._async_video_player.stop()
+            self._async_video_player = None
         try:
             import pygame
             pygame.quit()
