@@ -13,11 +13,14 @@ pose:
   enable_segmentation: false
 
 embedding:
-  model_path: "data/models/dance_embedding.pth"
-  embedding_dim: 128
-  sequence_length: 30         # frames per sequence window
-  graph_hidden_dim: 64
-  num_graph_layers: 3
+  model_dir: "data/models/embedding"
+  model_name: "embedding_gcn_e64_triplet"
+  model_path: ""              # optional direct .tflite path; empty uses registry/model_name
+  sequence_length: 30
+  feature_dims: 2             # 2=xy, 3=xyz, 4=xyz+visibility
+  input_layout: "BTJC"
+  top_k: 3
+  candidate_stride: 3
 
 scratch:
   model_dir: "data/models/scratch"
