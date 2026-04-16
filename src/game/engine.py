@@ -2256,11 +2256,13 @@ class GameEngine:
 
         if state == GameState.MENU:
             self._menu_focus_idx = 0
+            self._release_reference_assets()
         elif state == GameState.SONG_SELECT:
             self._selected_song_idx = 0
             self._song_focus_idx = 0
             self._song_panel = 0      # 항상 곡목록 패널부터 시작
             self._song_btn_idx = 0
+            self._release_reference_assets()
         elif state == GameState.READY:
             # 준비 화면 진입 시 상태 초기화
             self._ready_current_frame = None
@@ -2273,6 +2275,9 @@ class GameEngine:
                 songs = self._songs_for_mode(self._current_mode)
                 if songs:
                     self._current_song = songs[self._selected_song_idx]
+            
+            # 여기서 리소스를 미리 로드하여 PLAYING 시작 시 렉(스파이크)을 완전히 제거
+            self._load_reference_assets()
         elif state == GameState.COUNTDOWN:
             self._countdown_start = time.time()
             self._countdown_timer = 2  # 3초 카운트다운 (워밍업 시간 확보)
@@ -2299,92 +2304,22 @@ class GameEngine:
                 if self._embedding_comparator is not None:
                     self._embedding_comparator.reset()
                 self._warned_scratch_no_ref = False
-                # 참조 랜드마크 로드
-                self._ref_landmarks = None
+                
+                self._load_reference_assets()
+                
+                # 재생 바를 0초로 돌리기
                 self._ref_frame_landmarks = None
-                # 레퍼런스 영상 초기화
-                if self._ref_video_cap is not None:
-                    self._ref_video_cap.release()
-                    self._ref_video_cap = None
                 self._ref_video_frame = None
-                self._ref_video_fps = 30.0
-
-                if self._current_song and self._current_song.get("has_reference"):
-                    import numpy as np
+                if getattr(self, '_ref_video_cap', None) is not None:
                     import cv2 as _cv2
-                    ref_path = os.path.join(self._current_song["path"], "reference.npy")
+                    self._ref_video_cap.set(_cv2.CAP_PROP_POS_FRAMES, 0)
+                    
+                if getattr(self, '_audio_path', None) and os.path.exists(self._audio_path):
                     try:
-                        ref_data = np.load(ref_path)
-                        # (N, 33, 3) → (N, 33, 4): visibility 채널 추가
-                        if ref_data.ndim == 3 and ref_data.shape[2] == 3:
-                            vis = np.ones((*ref_data.shape[:2], 1), dtype=np.float32)
-                            ref_data = np.concatenate([ref_data, vis], axis=2)
-                        self._ref_landmarks = ref_data.astype(np.float32)
-                        print(f"[INFO] 참조 랜드마크 로드: {self._ref_landmarks.shape}")
-                        
-                        # 백그라운드 프리워밍(Pre-computing Warm-up) 실행
-                        if getattr(self, '_scratch_comparator', None):
-                            self._scratch_comparator.warmup_reference_embeddings(self._ref_landmarks)
-                        elif getattr(self, '_embedding_comparator', None):
-                            self._embedding_comparator.warmup_reference_embeddings(self._ref_landmarks)
-                            
+                        import pygame
+                        pygame.mixer.music.play()
                     except Exception as e:
-                        print(f"[WARN] 참조 랜드마크 로드 실패: {e}")
-
-                    # 레퍼런스 mp4 영상 로드 (metadata에 video 경로가 있는 경우)
-                    video_rel = self._current_song.get("video", "")
-                    if video_rel:
-                        # 절대 경로 구성
-                        project_root = os.path.dirname(os.path.dirname(
-                            os.path.dirname(os.path.abspath(__file__))))
-                        video_path = os.path.join(project_root, video_rel)
-                        if not os.path.exists(video_path):
-                            video_path = os.path.join(os.getcwd(), video_rel)
-                        if os.path.exists(video_path):
-                            self._ref_video_cap = _cv2.VideoCapture(video_path)
-                            self._ref_video_fps = self._current_song.get(
-                                "video_fps",
-                                self._ref_video_cap.get(_cv2.CAP_PROP_FPS) or 30.0,
-                            )
-                            # 영상 리사이즈 크기 미리 계산 (렌더링에서 반복 안 함)
-                            ui_cfg = self.config.get("ui", {})
-                            disp_w = ui_cfg.get("window_width", 1024)
-                            disp_h = ui_cfg.get("window_height", 600)
-                            HEADER_H = 55
-                            FOOTER_H = 30
-                            rp_w = disp_w - disp_w // 2  # 우 패널 너비
-                            rp_h = disp_h - HEADER_H - FOOTER_H
-                            vid_w = int(self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
-                            vid_h = int(self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
-                            if vid_w > 0 and vid_h > 0:
-                                vscale = min(rp_w / vid_w, rp_h / vid_h)
-                                tw, th = int(vid_w * vscale), int(vid_h * vscale)
-                                self._ref_video_size = (tw, th)
-                                self._ref_video_pos = (
-                                    disp_w // 2 + (rp_w - tw) // 2,
-                                    HEADER_H + (rp_h - th) // 2,
-                                )
-                            print(f"[INFO] 레퍼런스 영상 로드: {video_path} "
-                                  f"({self._ref_video_fps:.1f}fps, "
-                                  f"resize→{self._ref_video_size})")
-
-                            # 오디오 추출 및 플레이 (싱크 정확도를 위해 OGG(libvorbis) 무손실 패딩 사용)
-                            import subprocess
-                            import pygame
-                            audio_path = video_path.rsplit('.', 1)[0] + ".ogg"
-                            if not os.path.exists(audio_path):
-                                print(f"[INFO] 비디오에서 오디오 추출 중: {audio_path}")
-                                subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "libvorbis", "-q:a", "4", audio_path], capture_output=True)
-                            
-                            if os.path.exists(audio_path):
-                                try:
-                                    pygame.mixer.music.load(audio_path)
-                                    pygame.mixer.music.play()
-                                except Exception as e:
-                                    print(f"[WARN] 오디오 재생 실패: {e}")
-
-                        else:
-                            print(f"[WARN] 레퍼런스 영상 없음: {video_path}")
+                        print(f"[WARN] 오디오 재생 실패: {e}")
                 from game.session import GameSession
                 # 선택된 곡 정보 사용 (없으면 기본값)
                 song = self._current_song or {}
@@ -2402,6 +2337,93 @@ class GameEngine:
             pygame.mixer.music.pause()
         elif state == GameState.RESULT:
             self._result_data = self._scorer.get_final_result()
+
+    def _release_reference_assets(self):
+        """이전 곡의 리소스를 해제합니다."""
+        self._ref_landmarks = None
+        self._ref_frame_landmarks = None
+        if getattr(self, '_ref_video_cap', None) is not None:
+            self._ref_video_cap.release()
+            self._ref_video_cap = None
+        self._ref_video_frame = None
+        self._audio_path = None
+
+    def _load_reference_assets(self):
+        """PLAYING 진입 시의 초기 렉을 없애기 위해 미리 무거운 리소스(영상, Numpy 배열 등)를 로드해둡니다."""
+        if getattr(self, '_ref_landmarks', None) is not None:
+            return  # 이미 로드됨
+            
+        import os
+        import subprocess
+        import pygame
+        import numpy as np
+        import cv2 as _cv2
+
+        self._ref_video_fps = 30.0
+
+        if self._current_song and self._current_song.get("has_reference"):
+            ref_path = os.path.join(self._current_song["path"], "reference.npy")
+            try:
+                ref_data = np.load(ref_path)
+                if ref_data.ndim == 3 and ref_data.shape[2] == 3:
+                    vis = np.ones((*ref_data.shape[:2], 1), dtype=np.float32)
+                    ref_data = np.concatenate([ref_data, vis], axis=2)
+                self._ref_landmarks = ref_data.astype(np.float32)
+                
+                # 백그라운드 프리워밍 실행 (Non-blocking Thread 방식)
+                if getattr(self, '_scratch_comparator', None):
+                    self._scratch_comparator.warmup_reference_embeddings(self._ref_landmarks)
+                elif getattr(self, '_embedding_comparator', None):
+                    self._embedding_comparator.warmup_reference_embeddings(self._ref_landmarks)
+            except Exception as e:
+                print(f"[WARN] 참조 랜드마크 로드 실패: {e}")
+
+            video_rel = self._current_song.get("video", "")
+            if video_rel:
+                project_root = os.path.dirname(os.path.dirname(
+                    os.path.dirname(os.path.abspath(__file__))))
+                video_path = os.path.join(project_root, video_rel)
+                if not os.path.exists(video_path):
+                    video_path = os.path.join(os.getcwd(), video_rel)
+                
+                if os.path.exists(video_path):
+                    self._ref_video_cap = _cv2.VideoCapture(video_path)
+                    self._ref_video_fps = self._current_song.get(
+                        "video_fps",
+                        self._ref_video_cap.get(_cv2.CAP_PROP_FPS) or 30.0,
+                    )
+                    
+                    # 영상 리사이즈 크기 미리 계산 
+                    ui_cfg = self.config.get("ui", {})
+                    disp_w = ui_cfg.get("window_width", 1024)
+                    disp_h = ui_cfg.get("window_height", 600)
+                    HEADER_H = 55
+                    FOOTER_H = 30
+                    rp_w = disp_w - disp_w // 2
+                    rp_h = disp_h - HEADER_H - FOOTER_H
+                    vid_w = int(self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
+                    vid_h = int(self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
+                    if vid_w > 0 and vid_h > 0:
+                        vscale = min(rp_w / vid_w, rp_h / vid_h)
+                        tw, th = int(vid_w * vscale), int(vid_h * vscale)
+                        self._ref_video_size = (tw, th)
+                        self._ref_video_pos = (
+                            disp_w // 2 + (rp_w - tw) // 2,
+                            HEADER_H + (rp_h - th) // 2,
+                        )
+
+                    # 오디오 추출 및 프리로드 (Ogg Vorbis)
+                    self._audio_path = video_path.rsplit('.', 1)[0] + ".ogg"
+                    if not os.path.exists(self._audio_path):
+                        subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "libvorbis", "-q:a", "4", self._audio_path], capture_output=True)
+                    
+                    if os.path.exists(self._audio_path):
+                        try:
+                            pygame.mixer.music.load(self._audio_path)
+                        except Exception:
+                            pass
+                else:
+                    print(f"[WARN] 레퍼런스 영상 찾을 수 없음: {video_path}")
 
     def shutdown(self):
         """Clean up all resources."""
