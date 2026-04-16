@@ -533,6 +533,7 @@ class GameEngine:
             GameState.PAUSED: ["btn_pause", "btn_gameplay_menu"],
             GameState.RESULT: ["btn_retry", "btn_result_menu"],
             GameState.SETTINGS: ["btn_back"],
+            GameState.READY: ["btn_ready_skip", "btn_ready_cancel"],
         }
 
         def _get_focus_list():
@@ -763,6 +764,8 @@ class GameEngine:
             self.transition_to(GameState.MENU)
         elif btn_name == "btn_countdown_cancel":
             self.transition_to(GameState.MENU)
+        elif btn_name == "btn_ready_skip":
+            self.transition_to(GameState.COUNTDOWN)
         elif btn_name == "btn_ready_cancel":
             self.transition_to(GameState.MENU)
 
@@ -1495,14 +1498,31 @@ class GameEngine:
         msg_surf = self._fonts["body"].render(msg, True, msg_color)
         self._display.blit(msg_surf, msg_surf.get_rect(center=(w // 2, fy + FOOTER_H // 2 - 2)))
 
-        # ── 취소 버튼 ──────────────────────────────────────────
+        # ── 버튼 영역 (스킵 / 취소) ─────────────────────────────
+        # 스킵 버튼
+        skip_rect = pygame.Rect(w - 220, HEADER_H + 6, 100, 36)
+        self._btn_rects["btn_ready_skip"] = skip_rect
+        hover_s = skip_rect.collidepoint(pygame.mouse.get_pos())
+        focused_s = (getattr(self, '_generic_focus_idx', 0) == 0)
+        active_s = hover_s or focused_s
+        pygame.draw.rect(self._display, (35, 100, 60) if active_s else (25, 70, 40),
+                         skip_rect, border_radius=10)
+        pygame.draw.rect(self._display, (255, 255, 100) if focused_s else (100, 200, 150),
+                         skip_rect, 3 if focused_s else 2, border_radius=10)
+        skip_lbl = self._fonts["small"].render("SKIP", True, (255, 255, 255) if active_s else (200, 255, 220))
+        self._display.blit(skip_lbl, skip_lbl.get_rect(center=skip_rect.center))
+
+        # 취소 버튼
         cancel_rect = pygame.Rect(w - 110, HEADER_H + 6, 100, 36)
         self._btn_rects["btn_ready_cancel"] = cancel_rect
         hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
-        pygame.draw.rect(self._display, (100, 35, 35) if hover else (70, 25, 25),
+        focused_c = (getattr(self, '_generic_focus_idx', 0) == 1)
+        active_c = hover or focused_c
+        pygame.draw.rect(self._display, (100, 35, 35) if active_c else (70, 25, 25),
                          cancel_rect, border_radius=10)
-        pygame.draw.rect(self._display, (200, 100, 100), cancel_rect, 2, border_radius=10)
-        cancel_lbl = self._fonts["small"].render("CANCEL", True, (255, 200, 200))
+        pygame.draw.rect(self._display, (255, 255, 100) if focused_c else (200, 100, 100),
+                         cancel_rect, 3 if focused_c else 2, border_radius=10)
+        cancel_lbl = self._fonts["small"].render("CANCEL", True, (255, 255, 255) if active_c else (255, 200, 200))
         self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
 
     def _render_countdown(self, w, h):
