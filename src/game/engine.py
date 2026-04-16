@@ -907,21 +907,30 @@ class GameEngine:
 
         # 레퍼런스 영상 프레임 동기화 (영상 fps 기준)
         if self._ref_video_cap is not None and self._current_session:
-            video_fi = int(self._current_session.elapsed_time * self._ref_video_fps)
+            # pygame.mixer의 실제 오디오 재생 위치를 사용하여 정확도 극대화
+            import pygame
+            elapsed_sys = self._current_session.elapsed_time
+            if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
+                pos_ms = pygame.mixer.music.get_pos()
+                if pos_ms >= 0:
+                    elapsed_sys = pos_ms / 1000.0
+
+            video_fi = int(elapsed_sys * self._ref_video_fps)
             total_video_frames = int(self._ref_video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
             if video_fi < total_video_frames:
                 current_pos = int(self._ref_video_cap.get(cv2.CAP_PROP_POS_FRAMES))
 
-                # 영상fps > 게임fps이면 불필요한 프레임은 grab()으로 건너뜀
+                # 오차(frames_to_skip)가 발생하면 동기화를 위해 스킵
                 frames_to_skip = video_fi - current_pos
                 if frames_to_skip < 0 or frames_to_skip > 10:
-                    # 너무 멀면 seek
+                    # 너무 멀면 seek (상당히 느림)
                     self._ref_video_cap.set(cv2.CAP_PROP_POS_FRAMES, video_fi)
-                    frames_to_skip = 0
-                elif frames_to_skip > 1:
-                    # 중간 프레임은 grab만 (디코딩 안 함 — retrieve보다 훨씬 빠름)
-                    for _ in range(frames_to_skip - 1):
+                else:
+                    # 목표 프레임(video_fi)의 바로 앞 컷까지 건너뜀 (grab이 빠름)
+                    while current_pos < video_fi:
                         self._ref_video_cap.grab()
+                        current_pos += 1
 
                 vret, vframe = self._ref_video_cap.read()
                 if vret:
@@ -2359,13 +2368,13 @@ class GameEngine:
                                   f"({self._ref_video_fps:.1f}fps, "
                                   f"resize→{self._ref_video_size})")
 
-                            # 오디오 추출 및 플레이 (pygame mixer는 mp3/ogg를 지원함)
+                            # 오디오 추출 및 플레이 (싱크 정확도를 위해 OGG(libvorbis) 무손실 패딩 사용)
                             import subprocess
                             import pygame
-                            audio_path = video_path.rsplit('.', 1)[0] + ".mp3"
+                            audio_path = video_path.rsplit('.', 1)[0] + ".ogg"
                             if not os.path.exists(audio_path):
                                 print(f"[INFO] 비디오에서 오디오 추출 중: {audio_path}")
-                                subprocess.run(["ffmpeg", "-y", "-i", video_path, "-q:a", "0", "-map", "a", audio_path], capture_output=True)
+                                subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "libvorbis", "-q:a", "4", audio_path], capture_output=True)
                             
                             if os.path.exists(audio_path):
                                 try:
