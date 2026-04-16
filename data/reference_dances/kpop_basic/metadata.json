@@ -1,12 +1,11 @@
 {
   "id": "kpop_basic",
-  "title": "K-POP 기본 동작",
+  "title": "K-POP basic",
   "artist": "Let's Dance",
   "duration": 90,
   "bpm": 128,
   "difficulty": 2,
   "mode": [
-    "practice",
-    "challenge"
+    "practice"
   ]
 }

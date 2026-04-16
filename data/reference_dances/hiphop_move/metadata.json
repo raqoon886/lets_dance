@@ -1,11 +1,11 @@
 {
   "id": "hiphop_move",
-  "title": "브레이킹 댄스",
+  "title": "Breaking Dance!",
   "artist": "Let's Dance",
   "duration": 26,
   "bpm": 100,
-  "difficulty": 3,
-  "mode": ["practice", "challenge"],
+  "difficulty": 2,
+  "mode": ["challenge"],
   "video": "data/videos/breaking_mediapipe_processed.mp4",
   "video_fps": 30.0,
   "source_npy": "data/videos/breaking_mediapipe_processed_pose.npy"
