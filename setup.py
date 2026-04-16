@@ -27,6 +27,13 @@ setup(
             "jaxlib==0.4.26",
             "ipykernel>=6.29.0",
         ],
+        "mpose-pretrain": [
+            "mpose==1.2",
+            "tensorflow==2.16.2",
+            "jax==0.4.26",
+            "jaxlib==0.4.26",
+            "ipykernel>=6.29.0",
+        ],
     },
     entry_points={
         "console_scripts": [
