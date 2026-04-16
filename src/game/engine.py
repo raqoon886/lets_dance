@@ -2319,6 +2319,13 @@ class GameEngine:
                             ref_data = np.concatenate([ref_data, vis], axis=2)
                         self._ref_landmarks = ref_data.astype(np.float32)
                         print(f"[INFO] 참조 랜드마크 로드: {self._ref_landmarks.shape}")
+                        
+                        # 백그라운드 프리워밍(Pre-computing Warm-up) 실행
+                        if getattr(self, '_scratch_comparator', None):
+                            self._scratch_comparator.warmup_reference_embeddings(self._ref_landmarks)
+                        elif getattr(self, '_embedding_comparator', None):
+                            self._embedding_comparator.warmup_reference_embeddings(self._ref_landmarks)
+                            
                     except Exception as e:
                         print(f"[WARN] 참조 랜드마크 로드 실패: {e}")
 
