@@ -38,6 +38,7 @@ class GameEngine:
         self._camera = None
         self._pose_detector = None
         self._embedding_extractor = None
+        self._embedding_comparator = None
         self._scratch_comparator = None
         self._warned_scratch_no_ref = False
         self._scorer = None
@@ -163,13 +164,32 @@ class GameEngine:
             self._tolerance_delay = self.config.get("tolerance_delay", 1.0)
             print(f"[INFO] Score method: scratch ({model_name}: {model_path}, tolerance {self._tolerance_delay}s)")
         else:
-            # embedding 모드: ST-GCN 임베딩 + SimilarityCalculator
-            from scoring.similarity import SimilarityCalculator
-            self._similarity_calc = SimilarityCalculator(metric="sliding_window", window_size=15)
+            # embedding: fine-tuned TFLite encoder + cosine similarity.
+            from scoring.scratch_similarity import (
+                ScratchPoseSimilarity,
+                resolve_scratch_model_path,
+            )
+            embedding_cfg = self.config.get("embedding", {})
+            model_dir = embedding_cfg.get("model_dir", "data/models/embedding")
+            model_name = embedding_cfg.get("model_name", "dance_embedding")
+            model_path = resolve_scratch_model_path(
+                model_name=model_name,
+                model_dir=model_dir,
+                model_path=embedding_cfg.get("model_path"),
+            )
+            self._embedding_comparator = ScratchPoseSimilarity(
+                model_path=model_path,
+                sequence_length=embedding_cfg.get("sequence_length", 30),
+                feature_dims=embedding_cfg.get("feature_dims", 2),
+                input_layout=embedding_cfg.get("input_layout", "BTJC"),
+                top_k=embedding_cfg.get("top_k", 3),
+                candidate_stride=embedding_cfg.get("candidate_stride", 3),
+            )
             self._pose_comparator = None
-            # TODO: EmbeddingExtractor 초기화 (모델 학습 완료 후)
             self._embedding_extractor = None
-            print(f"[INFO] Score method: embedding (ST-GCN + sliding window cosine)")
+            self._similarity_method = "embedding"
+            self._tolerance_delay = self.config.get("tolerance_delay", 1.0)
+            print(f"[INFO] Score method: embedding ({model_name}: {model_path}, tolerance {self._tolerance_delay}s)")
 
         # ── 폰트 로드 (한국어 지원: NotoSansCJK → fallback SysFont) ──
         self._fonts = self._load_fonts(pygame)
@@ -671,15 +691,21 @@ class GameEngine:
                     if sim is None:
                         return
                 else:
-                    # embedding: ST-GCN 임베딩 비교 (TODO: 구현 후 연결)
-                    # 현재는 fallback으로 detection confidence 사용
-                    visibility = self._current_landmarks[:, 3]
-                    mean_vis = float(np.mean(visibility[visibility > 0]))
-                    sim = min(mean_vis, 1.0)
+                    # embedding: compare recent user motion window with
+                    # reference windows through a fine-tuned TFLite encoder.
+                    tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
+                    sim = self._embedding_comparator.compute(
+                        self._current_landmarks,
+                        self._ref_landmarks,
+                        self._ref_current_idx,
+                        tolerance_frames=tolerance_frames,
+                    )
+                    if sim is None:
+                        return
             else:
-                if self._score_method == "scratch":
+                if self._score_method in ("scratch", "embedding"):
                     if not self._warned_scratch_no_ref:
-                        print("[WARN] scratch scoring requires reference.npy; scoring paused.")
+                        print(f"[WARN] {self._score_method} scoring requires reference.npy; scoring paused.")
                         self._warned_scratch_no_ref = True
                     return
                 # 레퍼런스 없으면 detection confidence로 대체
@@ -1656,6 +1682,8 @@ class GameEngine:
                 self._pose_detected = False
                 if self._scratch_comparator is not None:
                     self._scratch_comparator.reset()
+                if self._embedding_comparator is not None:
+                    self._embedding_comparator.reset()
                 self._warned_scratch_no_ref = False
                 # 참조 랜드마크 로드
                 self._ref_landmarks = None
