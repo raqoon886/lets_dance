@@ -1,0 +1,160 @@
+{
+  "created_at": "2026-04-15 22:10:04",
+  "model_name": "my_tcn_e32_bce",
+  "model_type": "tcn",
+  "runtime_score_method": "scratch",
+  "runtime_output_mode": "embedding",
+  "input_layout": "BTJC",
+  "input_shape": [
+    1,
+    30,
+    12,
+    2
+  ],
+  "output_shape": [
+    1,
+    32
+  ],
+  "target_joints": [
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28
+  ],
+  "config": {
+    "data_dir": "data/reference_dances",
+    "model_name": "my_tcn_e32_bce",
+    "model_type": "tcn",
+    "output_dir": "data/models/scratch",
+    "output": null,
+    "keras_output": null,
+    "metadata_output": null,
+    "sequence_length": 30,
+    "feature_dims": 2,
+    "embedding_dim": 32,
+    "filters": 32,
+    "blocks": 3,
+    "kernel_size": 3,
+    "dropout": 0.1,
+    "epochs": 30,
+    "batch_size": 32,
+    "steps_per_epoch": 60,
+    "validation_steps": 10,
+    "patience": 5,
+    "learning_rate": 0.001,
+    "loss_type": "bce",
+    "triplet_margin": 0.2,
+    "positive_jitter": 6,
+    "negative_gap": 600,
+    "noise_std": 0.015,
+    "seed": 42,
+    "no_quantize": false,
+    "dry_run": false,
+    "convert_only": false
+  },
+  "references": [
+    {
+      "name": "beginner_wave",
+      "path": "data/reference_dances/beginner_wave/reference.npy",
+      "frames": 1800
+    },
+    {
+      "name": "hiphop_move",
+      "path": "data/reference_dances/hiphop_move/reference.npy",
+      "frames": 792
+    },
+    {
+      "name": "kpop_basic",
+      "path": "data/reference_dances/kpop_basic/reference.npy",
+      "frames": 2700
+    },
+    {
+      "name": "cheerup_dance",
+      "path": "data/reference_dances/cheerup_dance/reference.npy",
+      "frames": 724
+    },
+    {
+      "name": "freestyle_free",
+      "path": "data/reference_dances/freestyle_free/reference.npy",
+      "frames": 3600
+    }
+  ],
+  "history": {
+    "binary_accuracy": [
+      0.6786458492279053,
+      0.7744791507720947,
+      0.7802083492279053,
+      0.7739583253860474,
+      0.7671874761581421,
+      0.7848958373069763,
+      0.7755208611488342,
+      0.776562511920929,
+      0.7807291746139526,
+      0.7776041626930237,
+      0.792187511920929,
+      0.7994791865348816,
+      0.7890625,
+      0.7885416746139526,
+      0.8046875
+    ],
+    "loss": [
+      0.7083492875099182,
+      0.47914594411849976,
+      0.4725937247276306,
+      0.4690534472465515,
+      0.4710368514060974,
+      0.459090918302536,
+      0.45804324746131897,
+      0.4477252662181854,
+      0.43839022517204285,
+      0.438802033662796,
+      0.4214123785495758,
+      0.4142829477787018,
+      0.43053093552589417,
+      0.4162995517253876,
+      0.39539793133735657
+    ],
+    "val_binary_accuracy": [
+      0.7124999761581421,
+      0.75,
+      0.765625,
+      0.784375011920929,
+      0.7406250238418579,
+      0.71875,
+      0.793749988079071,
+      0.7593749761581421,
+      0.7718750238418579,
+      0.815625011920929,
+      0.793749988079071,
+      0.7749999761581421,
+      0.765625,
+      0.778124988079071,
+      0.824999988079071
+    ],
+    "val_loss": [
+      0.6044791340827942,
+      0.44303417205810547,
+      0.47180381417274475,
+      0.43610596656799316,
+      0.46715396642684937,
+      0.48446640372276306,
+      0.39040905237197876,
+      0.4340347349643707,
+      0.4325944483280182,
+      0.3601740598678589,
+      0.3993028998374939,
+      0.39411818981170654,
+      0.4243149757385254,
+      0.38852041959762573,
+      0.3764142692089081
+    ]
+  }
+}

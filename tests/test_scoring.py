@@ -91,3 +91,76 @@ class TestFeedbackGenerator:
         for _ in range(100):
             gen.update()
         assert not gen.is_active
+
+
+class TestScratchPoseSimilarity:
+    """Test scratch TFLite scoring wrapper without a real TFLite file."""
+
+    class FakeInterpreter:
+        def __init__(self):
+            self._input = None
+
+        def get_input_details(self):
+            return [{
+                "index": 0,
+                "shape": np.array([1, 3, 12, 2], dtype=np.int32),
+                "dtype": np.float32,
+            }]
+
+        def get_output_details(self):
+            return [{
+                "index": 0,
+                "shape": np.array([1, 4], dtype=np.int32),
+                "dtype": np.float32,
+            }]
+
+        def set_tensor(self, _index, value):
+            self._input = value.astype(np.float32)
+
+        def invoke(self):
+            pass
+
+        def get_tensor(self, _index):
+            value = float(np.mean(self._input))
+            return np.array([[value, value * 0.5, value * 0.25, 1.0]], dtype=np.float32)
+
+    def test_waits_for_full_window_then_returns_finite_score(self):
+        from scoring.scratch_similarity import ScratchPoseSimilarity
+
+        calc = ScratchPoseSimilarity(
+            model_path="unused.tflite",
+            sequence_length=3,
+            feature_dims=2,
+            interpreter=self.FakeInterpreter(),
+        )
+        reference = np.ones((5, 33, 4), dtype=np.float32)
+        user = np.ones((33, 4), dtype=np.float32)
+
+        assert calc.compute(user, reference, 0) is None
+        assert calc.compute(user, reference, 1) is None
+        score = calc.compute(user, reference, 2)
+
+        assert isinstance(score, float)
+        assert np.isfinite(score)
+        assert 0.0 <= score <= 1.0
+
+    def test_resolve_model_name_from_registry(self, tmp_path):
+        from scoring.scratch_similarity import resolve_scratch_model_path
+
+        model_dir = tmp_path / "scratch"
+        model_dir.mkdir()
+        expected = model_dir / "gcn_e64.tflite"
+        registry = {
+            "variants": [{
+                "name": "gcn_e64",
+                "paths": {"tflite": str(expected)},
+            }]
+        }
+        (model_dir / "model_registry.json").write_text(
+            __import__("json").dumps(registry), encoding="utf-8")
+
+        resolved = resolve_scratch_model_path(
+            model_name="gcn_e64",
+            model_dir=str(model_dir),
+        )
+        assert resolved == str(expected)

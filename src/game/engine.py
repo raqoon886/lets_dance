@@ -38,6 +38,8 @@ class GameEngine:
         self._camera = None
         self._pose_detector = None
         self._embedding_extractor = None
+        self._scratch_comparator = None
+        self._warned_scratch_no_ref = False
         self._scorer = None
         self._ui = None
         self._current_session = None
@@ -134,6 +136,32 @@ class GameEngine:
             self._tolerance_delay = self.config.get("tolerance_delay", 1.0)
             self._embedding_extractor = None
             print(f"[INFO] Score method: direct ({self._similarity_method} similarity, tolerance {self._tolerance_delay}s)")
+        elif self._score_method == "scratch":
+            from scoring.scratch_similarity import (
+                ScratchPoseSimilarity,
+                resolve_scratch_model_path,
+            )
+            scratch_cfg = self.config.get("scratch", {})
+            model_dir = scratch_cfg.get("model_dir", "data/models/scratch")
+            model_name = scratch_cfg.get("model_name", "gcn_e64")
+            model_path = resolve_scratch_model_path(
+                model_name=model_name,
+                model_dir=model_dir,
+                model_path=scratch_cfg.get("model_path"),
+            )
+            self._scratch_comparator = ScratchPoseSimilarity(
+                model_path=model_path,
+                sequence_length=scratch_cfg.get("sequence_length", 30),
+                feature_dims=scratch_cfg.get("feature_dims", 2),
+                input_layout=scratch_cfg.get("input_layout", "BTJC"),
+                top_k=scratch_cfg.get("top_k", 3),
+                candidate_stride=scratch_cfg.get("candidate_stride", 3),
+            )
+            self._pose_comparator = None
+            self._embedding_extractor = None
+            self._similarity_method = "scratch"
+            self._tolerance_delay = self.config.get("tolerance_delay", 1.0)
+            print(f"[INFO] Score method: scratch ({model_name}: {model_path}, tolerance {self._tolerance_delay}s)")
         else:
             # embedding 모드: ST-GCN 임베딩 + SimilarityCalculator
             from scoring.similarity import SimilarityCalculator
@@ -630,6 +658,18 @@ class GameEngine:
                         sim_now = self._pose_comparator.cosine_similarity(
                             self._current_landmarks, self._ref_frame_landmarks)
                     print(f"\r[DBG] now={sim_now:.3f} top3={sim:.3f} max={best_sims[0]:.3f} win={end_idx-start_idx}f", end="")
+                elif self._score_method == "scratch":
+                    # scratch: compare recent user motion window with reference
+                    # motion windows through a scratch-trained TFLite encoder.
+                    tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
+                    sim = self._scratch_comparator.compute(
+                        self._current_landmarks,
+                        self._ref_landmarks,
+                        self._ref_current_idx,
+                        tolerance_frames=tolerance_frames,
+                    )
+                    if sim is None:
+                        return
                 else:
                     # embedding: ST-GCN 임베딩 비교 (TODO: 구현 후 연결)
                     # 현재는 fallback으로 detection confidence 사용
@@ -637,6 +677,11 @@ class GameEngine:
                     mean_vis = float(np.mean(visibility[visibility > 0]))
                     sim = min(mean_vis, 1.0)
             else:
+                if self._score_method == "scratch":
+                    if not self._warned_scratch_no_ref:
+                        print("[WARN] scratch scoring requires reference.npy; scoring paused.")
+                        self._warned_scratch_no_ref = True
+                    return
                 # 레퍼런스 없으면 detection confidence로 대체
                 visibility = self._current_landmarks[:, 3]
                 mean_vis = float(np.mean(visibility[visibility > 0]))
@@ -1604,6 +1649,9 @@ class GameEngine:
                 self._feedback_timer = 0.0
                 self._current_frame = None
                 self._pose_detected = False
+                if self._scratch_comparator is not None:
+                    self._scratch_comparator.reset()
+                self._warned_scratch_no_ref = False
                 # 참조 랜드마크 로드
                 self._ref_landmarks = None
                 self._ref_frame_landmarks = None
