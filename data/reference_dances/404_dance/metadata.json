@@ -1,0 +1,12 @@
+{
+  "id": "404_dance",
+  "title": "404 댄스",
+  "artist": "Unknown",
+  "duration": 30,
+  "bpm": 120,
+  "difficulty": 5,
+  "mode": ["practice", "challenge"],
+  "video": "data/videos/404_mediapipe_processed.mp4",
+  "video_fps": 30.0,
+  "source_npy": "data/videos/404_mediapipe_processed_pose.npy"
+}

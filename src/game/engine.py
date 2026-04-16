@@ -1639,11 +1639,16 @@ class GameEngine:
         elif state == GameState.PLAYING:
             # PAUSED→PLAYING 복귀인 경우에만 세션 유지
             resuming_from_pause = getattr(self, '_prev_state', None) == GameState.PAUSED
-            if not resuming_from_pause:
+            if resuming_from_pause:
+                import pygame
+                pygame.mixer.music.unpause()
+            else:
                 # 새 게임 시작: 이전 세션 완전 정리
                 if self._current_session is not None:
                     self._current_session.is_active = False
                     self._current_session = None
+                import pygame
+                pygame.mixer.music.stop()
                 self._scorer.reset()
                 self._last_feedback = None
                 self._feedback_timer = 0.0
@@ -1713,6 +1718,22 @@ class GameEngine:
                             print(f"[INFO] 레퍼런스 영상 로드: {video_path} "
                                   f"({self._ref_video_fps:.1f}fps, "
                                   f"resize→{self._ref_video_size})")
+
+                            # 오디오 추출 및 플레이 (pygame mixer는 mp3/ogg를 지원함)
+                            import subprocess
+                            import pygame
+                            audio_path = video_path.rsplit('.', 1)[0] + ".mp3"
+                            if not os.path.exists(audio_path):
+                                print(f"[INFO] 비디오에서 오디오 추출 중: {audio_path}")
+                                subprocess.run(["ffmpeg", "-y", "-i", video_path, "-q:a", "0", "-map", "a", audio_path], capture_output=True)
+                            
+                            if os.path.exists(audio_path):
+                                try:
+                                    pygame.mixer.music.load(audio_path)
+                                    pygame.mixer.music.play()
+                                except Exception as e:
+                                    print(f"[WARN] 오디오 재생 실패: {e}")
+
                         else:
                             print(f"[WARN] 레퍼런스 영상 없음: {video_path}")
                 from game.session import GameSession
@@ -1728,7 +1749,8 @@ class GameEngine:
                 self._current_session.start()
         elif state == GameState.PAUSED:
             # 일시정지 — 현재 세션 타이머는 계속 흐름 (추후 개선 가능)
-            pass
+            import pygame
+            pygame.mixer.music.pause()
         elif state == GameState.RESULT:
             self._result_data = self._scorer.get_final_result()
 
