@@ -17,6 +17,17 @@ setup(
         "pyyaml>=6.0",
         "scipy>=1.10.0",
     ],
+    extras_require={
+        "scratch-runtime": [
+            "tflite-runtime>=2.14.0",
+        ],
+        "scratch-train": [
+            "tensorflow==2.16.2",
+            "jax==0.4.26",
+            "jaxlib==0.4.26",
+            "ipykernel>=6.29.0",
+        ],
+    },
     entry_points={
         "console_scripts": [
             "lets-dance=main:main",
