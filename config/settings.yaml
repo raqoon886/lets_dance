@@ -16,6 +16,8 @@ embedding:
   model_dir: "data/models/embedding"
   model_name: "embedding_gcn_e64_triplet"
   model_path: ""              # optional direct .tflite path; empty uses registry/model_name
+  use_reference_cache: true
+  reference_cache_dir: "data/cache/reference_embeddings"
   sequence_length: 30
   feature_dims: 2             # 2=xy, 3=xyz, 4=xyz+visibility
   input_layout: "BTJC"
@@ -26,6 +28,8 @@ scratch:
   model_dir: "data/models/scratch"
   model_name: "my_gcn_e64_bce"
   model_path: ""              # optional direct .tflite path; empty uses registry/model_name
+  use_reference_cache: true
+  reference_cache_dir: "data/cache/reference_embeddings"
   sequence_length: 30
   feature_dims: 2             # 2=xy, 3=xyz, 4=xyz+visibility
   input_layout: "BTJC"        # BTJC=[1,T,J,C], BJTC=[1,J,T,C], BTC=[1,T,J*C]
@@ -41,6 +45,12 @@ scoring:
     great: 75
     good: 60
     ok: 40
+
+runtime_smoothing:
+  pose_hold_frames: 6              # short pose-detection dropouts reuse the last valid pose
+  score_hold_seconds: 0.3          # keep the last feedback visible briefly when no new score is produced
+  model_warmup_direct_fallback: true
+  fallback_similarity: "angle"     # direct fallback used while scratch/embedding windows are not ready
 
 game:
   countdown_seconds: 3
