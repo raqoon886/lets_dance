@@ -141,10 +141,52 @@ class ScratchPoseSimilarity:
         if end < self.sequence_length - 1:
             return []
         start = max(self.sequence_length - 1, end - int(tolerance_frames))
-        indices = list(range(start, end + 1, self.candidate_stride))
-        if indices and indices[-1] != end:
+        
+        # 캐시 히트율(Cache Hit Rate) 극대화를 위해 start를 candidate_stride의 배수로 정렬
+        remainder = start % self.candidate_stride
+        start_aligned = start if remainder == 0 else start + (self.candidate_stride - remainder)
+        
+        indices = list(range(start_aligned, end + 1, self.candidate_stride))
+        if not indices or indices[-1] != end:
             indices.append(end)
         return indices
+
+    def warmup_reference_embeddings(self, reference_sequence):
+        """Pre-compute reference embeddings (background thread friendly)."""
+        if reference_sequence is None:
+            return
+            
+        total_frames = len(reference_sequence)
+        start = self.sequence_length - 1
+        remainder = start % self.candidate_stride
+        start_aligned = start if remainder == 0 else start + (self.candidate_stride - remainder)
+        
+        import threading
+        
+        def _task():
+            try:
+                # 독립적인 인터프리터를 가져 스레드 충돌(Crash)을 방지
+                temp_encoder = ScratchPoseSimilarity(
+                    model_path=self.model_path,
+                    sequence_length=self.sequence_length,
+                    feature_dims=self.feature_dims,
+                    input_layout=self.input_layout,
+                    target_joints=self.target_joints,
+                    top_k=self.top_k,
+                    candidate_stride=self.candidate_stride,
+                )
+                # 원본 캐시 참조(공유). Python dict 삽입은 Thread-safe
+                temp_encoder._ref_embedding_cache = self._ref_embedding_cache
+                
+                for idx in range(start_aligned, total_frames, self.candidate_stride):
+                    # 만약 게임 메인 루프에서 먼저 계산했다면 건너뜀
+                    if idx not in temp_encoder._ref_embedding_cache:
+                        temp_encoder._reference_embedding(reference_sequence, idx)
+                print("[INFO] TFLite background warmup complete.")
+            except Exception as e:
+                print(f"[WARN] TFLite warmup failed: {e}")
+                
+        threading.Thread(target=_task, daemon=True, name="tflite-warmup").start()
 
     def _reference_window(self, reference_sequence, end_idx):
         return build_pose_window(
