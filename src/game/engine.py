@@ -520,6 +520,28 @@ class GameEngine:
                     meta = json.load(f)
                 meta["path"]          = os.path.join(base, song_dir)
                 meta["has_reference"] = os.path.exists(ref_path)
+                
+                # --- 실제 비디오 파일 길이를 읽어 메타데이터 duration 보정 ---
+                # 이 과정을 통해 스테이지 선택 화면에 표시되는 곡의 초수와 실제 게임 플레이 초수를 동기화합니다.
+                video_rel = meta.get("video", "")
+                if video_rel:
+                    import cv2 as _cv2
+                    project_root = os.path.dirname(os.path.dirname(
+                        os.path.dirname(os.path.abspath(__file__))))
+                    video_path = os.path.join(project_root, video_rel)
+                    if not os.path.exists(video_path):
+                        video_path = os.path.join(os.getcwd(), video_rel)
+                    if os.path.exists(video_path):
+                        cap = _cv2.VideoCapture(video_path)
+                        fps = cap.get(_cv2.CAP_PROP_FPS)
+                        total = cap.get(_cv2.CAP_PROP_FRAME_COUNT)
+                        if fps > 0 and total > 0:
+                            real_dur = total / fps
+                            current_dur = float(meta.get("duration", real_dur))
+                            meta["duration"] = min(current_dur, real_dur - 0.15)
+                        cap.release()
+                # -------------------------------------------------------------
+                
                 songs.append(meta)
             except Exception as e:
                 print(f"[WARN] 곡 로드 실패 {song_dir}: {e}")
