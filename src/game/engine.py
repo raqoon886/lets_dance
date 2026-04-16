@@ -474,6 +474,8 @@ class GameEngine:
                 print(f"[WARN] 곡 로드 실패 {song_dir}: {e}")
 
         print(f"[INFO] {len(songs)}곡 로드됨 (base: {base})")
+        # 난이도 오름차순 정렬 (같은 난이도면 title 순)
+        songs.sort(key=lambda s: (s.get("difficulty", 0), s.get("title", "")))
         return songs
         songs = []
         if not os.path.isdir(base):
@@ -522,25 +524,31 @@ class GameEngine:
         import pygame
 
         # ── 화면별 포커스 버튼 목록 정의 ──────────────────────────────
-        # 방향키로 순환 가능한 버튼 순서를 화면별로 고정.
-        # 'b' / ESC 는 별도 처리 (뒤로가기).
         FOCUS_LISTS = {
             GameState.MENU: [
                 "btn_practice", "btn_challenge", "btn_freestyle",
                 "btn_settings", "btn_quit",
             ],
-            GameState.SONG_SELECT: None,   # 곡 수가 동적이므로 런타임 생성
-            GameState.PAUSED: ["btn_pause", "btn_gameplay_menu"],
-            GameState.RESULT: ["btn_retry", "btn_result_menu"],
+            GameState.PAUSED:   ["btn_pause", "btn_gameplay_menu"],
+            GameState.RESULT:   ["btn_retry", "btn_result_menu"],
             GameState.SETTINGS: ["btn_back"],
             GameState.READY: ["btn_ready_skip", "btn_ready_cancel"],
         }
 
+        # SONG_SELECT: 좌우로 패널 전환 (0=곡목록, 1=상세/버튼)
+        # _song_panel: 0=곡목록 패널, 1=버튼 패널(START=0, BACK=1)
+        if not hasattr(self, '_song_panel'):
+            self._song_panel = 0
+        if not hasattr(self, '_song_btn_idx'):
+            self._song_btn_idx = 0   # 0=START, 1=BACK
+
         def _get_focus_list():
             if self.state == GameState.SONG_SELECT:
                 songs = self._songs_for_mode(self._current_mode)
-                return [f"btn_song_{i}" for i in range(len(songs))] + \
-                       ["btn_song_start", "btn_song_back"]
+                if self._song_panel == 0:
+                    return [f"btn_song_{i}" for i in range(len(songs))]
+                else:
+                    return ["btn_song_start", "btn_song_back"]
             return FOCUS_LISTS.get(self.state, [])
 
         def _focus_count():
@@ -550,7 +558,10 @@ class GameEngine:
             if self.state == GameState.MENU:
                 return self._menu_focus_idx
             if self.state == GameState.SONG_SELECT:
-                return self._song_focus_idx
+                if self._song_panel == 0:
+                    return self._song_focus_idx
+                else:
+                    return self._song_btn_idx
             return getattr(self, '_generic_focus_idx', 0)
 
         def _set_focus_idx(idx):
@@ -561,11 +572,11 @@ class GameEngine:
             if self.state == GameState.MENU:
                 self._menu_focus_idx = idx
             elif self.state == GameState.SONG_SELECT:
-                self._song_focus_idx = idx
-                # 곡 항목일 때만 selected 갱신
-                songs = self._songs_for_mode(self._current_mode)
-                if idx < len(songs):
+                if self._song_panel == 0:
+                    self._song_focus_idx = idx
                     self._selected_song_idx = idx
+                else:
+                    self._song_btn_idx = idx
             else:
                 self._generic_focus_idx = idx
 
@@ -621,21 +632,44 @@ class GameEngine:
                 elif event.key == pygame.K_q:
                     self.running = False
 
-                # ↓ / → : 다음 항목
-                elif event.key in (pygame.K_DOWN, pygame.K_RIGHT):
+                # ↓ : 다음 항목 (수직 이동)
+                elif event.key == pygame.K_DOWN:
                     cnt = _focus_count()
                     if cnt:
                         _set_focus_idx(_get_focus_idx() + 1)
 
-                # ↑ / ← : 이전 항목
-                elif event.key in (pygame.K_UP, pygame.K_LEFT):
+                # ↑ : 이전 항목 (수직 이동)
+                elif event.key == pygame.K_UP:
                     cnt = _focus_count()
                     if cnt:
                         _set_focus_idx(_get_focus_idx() - 1)
 
+                # → : SONG_SELECT=상세패널로, 그 외=다음 항목
+                elif event.key == pygame.K_RIGHT:
+                    if self.state == GameState.SONG_SELECT:
+                        self._song_panel = 1
+                        self._song_btn_idx = 0
+                    else:
+                        cnt = _focus_count()
+                        if cnt:
+                            _set_focus_idx(_get_focus_idx() + 1)
+
+                # ← : SONG_SELECT=곡목록으로, 그 외=이전 항목
+                elif event.key == pygame.K_LEFT:
+                    if self.state == GameState.SONG_SELECT:
+                        self._song_panel = 0
+                    else:
+                        cnt = _focus_count()
+                        if cnt:
+                            _set_focus_idx(_get_focus_idx() - 1)
+
                 # Enter / Space → 선택 확정
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    _press_focused()
+                    if self.state == GameState.READY:
+                        # READY 화면에서 Enter = SKIP (전신 감지 대기 없이 바로 시작)
+                        self._on_button_press("btn_ready_skip")
+                    else:
+                        _press_focused()
 
                 # P → 게임 중 일시정지 토글
                 elif event.key == pygame.K_p:
@@ -768,6 +802,9 @@ class GameEngine:
             self.transition_to(GameState.COUNTDOWN)
         elif btn_name == "btn_ready_cancel":
             self.transition_to(GameState.MENU)
+        elif btn_name == "btn_ready_skip":
+            # 전신 감지 대기 없이 바로 카운트다운으로 진입
+            self.transition_to(GameState.COUNTDOWN)
 
     def _update(self):
         """Update game state based on current state."""
@@ -1198,6 +1235,30 @@ class GameEngine:
         self._display.blit(footer, footer.get_rect(
             center=(w // 2, h - MARGIN_BOTTOM // 2 - 2)))
 
+        # ── 키보드 안내 박스 (타이틀 아래 우측) ──────────────────
+        key_lines = [
+            ("KEYBOARD CONTROLS", (180, 180, 255)),
+            ("UP / DOWN   :  Move menu",       (200, 200, 220)),
+            ("ENTER       :  Select / Start",  (200, 200, 220)),
+            ("B / ESC     :  Back / Quit",     (200, 200, 220)),
+            ("P           :  Pause game",      (200, 200, 220)),
+            ("Q           :  Force quit",      (200, 200, 220)),
+        ]
+        kx = w - 14
+        ky = MARGIN_TOP + 110
+        line_h = 18
+        box_w = 260
+        box_h = len(key_lines) * line_h + 14
+        kb_surf = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+        kb_surf.fill((20, 10, 50, 160))
+        self._display.blit(kb_surf, (kx - box_w, ky))
+        pygame.draw.rect(self._display, (80, 60, 130),
+                         pygame.Rect(kx - box_w, ky, box_w, box_h), 1, border_radius=6)
+        for li, (txt, col) in enumerate(key_lines):
+            f = self._fonts["small_retro"] if li == 0 else self._fonts["small"]
+            s = f.render(txt, True, col)
+            self._display.blit(s, (kx - box_w + 10, ky + 7 + li * line_h))
+
     def _render_song_select(self, w, h):
         """곡 선택 화면 — retro-fancy neon style."""
         import pygame
@@ -1350,7 +1411,8 @@ class GameEngine:
                                          pw - 32, start_h)
                 self._btn_rects["btn_song_start"] = start_rect
                 hover_s   = start_rect.collidepoint(mouse_pos)
-                focused_s = (self._song_focus_idx == len(songs))  # songs 다음 인덱스 = start
+                focused_s = (getattr(self, '_song_panel', 0) == 1 and
+                             getattr(self, '_song_btn_idx', 0) == 0)
 
                 btn_bg = pygame.Surface((start_rect.width, start_rect.height), pygame.SRCALPHA)
                 btn_bg.fill((*[c // 3 for c in mode_col], 220 if (hover_s or focused_s) else 160))
@@ -1370,7 +1432,8 @@ class GameEngine:
         back_rect = pygame.Rect(14, back_y, 140, 38)
         self._btn_rects["btn_song_back"] = back_rect
         hover_b   = back_rect.collidepoint(mouse_pos)
-        focused_b = (self._song_focus_idx == len(songs) + 1)  # start 다음 = back
+        focused_b = (getattr(self, '_song_panel', 0) == 1 and
+                     getattr(self, '_song_btn_idx', 0) == 1)
 
         bb_surf = pygame.Surface((140, 38), pygame.SRCALPHA)
         bb_surf.fill((40, 25, 70, 200 if (hover_b or focused_b) else 140))
@@ -1382,9 +1445,12 @@ class GameEngine:
                                              (220, 215, 240) if (hover_b or focused_b) else (160, 155, 185))
         self._display.blit(back_s, back_s.get_rect(center=back_rect.center))
 
-        # ── 푸터 ─────────────────────────────────────────────────
-        hint = self._fonts["small"].render(
-            "UP/DOWN: MOVE   ENTER: START   ESC: BACK", True, (130, 110, 170))
+        # ── 패널 포커스 위치 안내 (우측 하단) ──────────────────────
+        if getattr(self, '_song_panel', 0) == 0:
+            nav_hint = "UP/DOWN: SELECT SONG   RIGHT: DETAILS   ESC: BACK"
+        else:
+            nav_hint = "UP/DOWN: START/BACK   LEFT: SONG LIST   ENTER: CONFIRM"
+        hint = self._fonts["small"].render(nav_hint, True, (130, 110, 170))
         self._display.blit(hint, hint.get_rect(center=(w // 2, h - 14)))
 
     def _render_ready(self, w, h):
@@ -1498,7 +1564,6 @@ class GameEngine:
         msg_surf = self._fonts["body"].render(msg, True, msg_color)
         self._display.blit(msg_surf, msg_surf.get_rect(center=(w // 2, fy + FOOTER_H // 2 - 2)))
 
-        # ── 버튼 영역 (스킵 / 취소) ─────────────────────────────
         # 스킵 버튼
         skip_rect = pygame.Rect(w - 220, HEADER_H + 6, 100, 36)
         self._btn_rects["btn_ready_skip"] = skip_rect
@@ -1774,8 +1839,9 @@ class GameEngine:
         # ── 패널 풀 테두리 + 레이블 (effects 위에 그려 항상 보임) ─────
         left_border_col  = self._neon_color((60, 180, 255), tick, 0.9)
         right_border_col = self._neon_color((255, 160, 40), tick, 0.9)
-        self._draw_neon_rect(self._display, left_rect,  left_border_col,  width=3, radius=0, glow_radius=6)
-        self._draw_neon_rect(self._display, right_rect, right_border_col, width=3, radius=0, glow_radius=6)
+        # glow_radius=0 → 안쪽으로 번지지 않는 단순 테두리
+        self._draw_neon_rect(self._display, left_rect,  left_border_col,  width=3, radius=0, glow_radius=0)
+        self._draw_neon_rect(self._display, right_rect, right_border_col, width=3, radius=0, glow_radius=0)
 
         lbl_me    = self._fonts["small_retro"].render("ME",    True, (120, 200, 255))
         lbl_guide = self._fonts["small_retro"].render("GUIDE", True, (255, 180, 80))
@@ -2191,6 +2257,8 @@ class GameEngine:
         elif state == GameState.SONG_SELECT:
             self._selected_song_idx = 0
             self._song_focus_idx = 0
+            self._song_panel = 0      # 항상 곡목록 패널부터 시작
+            self._song_btn_idx = 0
         elif state == GameState.READY:
             # 준비 화면 진입 시 상태 초기화
             self._ready_current_frame = None
