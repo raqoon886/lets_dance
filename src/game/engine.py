@@ -102,6 +102,9 @@ class GameEngine:
         import cv2
 
         pygame.init()
+        # 기본 버퍼(4096)는 ~100ms의 레이턴시를 유발하여 영상이 소리에 비해 먼저 나오는 느낌을 줍니다.
+        # 지연을 최소화하기 위해 버퍼를 512로 줄여서 선제 초기화합니다.
+        pygame.mixer.pre_init(44100, -16, 2, 512)
         pygame.mixer.init()
         # 키보드 반복 입력: 200ms 후 첫 반복, 이후 80ms 간격
         pygame.key.set_repeat(200, 80)
@@ -913,7 +916,11 @@ class GameEngine:
             if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
                 pos_ms = pygame.mixer.music.get_pos()
                 if pos_ms >= 0:
-                    elapsed_sys = pos_ms / 1000.0
+                    # 마이너스 지연(오프셋)을 주어 영상이 소리보다 살짝 늦게(느리게) 렌더링되게 보정
+                    # 오디오 하드웨어 버퍼와 OS 전달 시간의 차이를 보정하는 리듬 게임 필수 로직
+                    audio_latency = self.config.get("audio", {}).get("latency_offset", 0.040)
+                    elapsed_sys = (pos_ms / 1000.0) - audio_latency
+                    if elapsed_sys < 0: elapsed_sys = 0.0
 
             video_fi = int(elapsed_sys * self._ref_video_fps)
             total_video_frames = int(self._ref_video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
