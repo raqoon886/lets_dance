@@ -145,6 +145,14 @@ class GameEngine:
         )
         pose_detector.initialize()
 
+        # [MediaPipe 초기 렉 방지 워밍업]
+        # MediaPipe는 첫 추론 시 그래프 컴파일을 위해 일시적으로 CPU를 최대치로 점유합니다.
+        # 인게임(메뉴) 화면 진입 후 백그라운드 스레드에서 이것이 발생하면 화면 전체가 1~2초 멈추므로
+        # 미리 더미 프레임으로 파이프라인을 뚫어두어 렉을 사전에 제거합니다.
+        import numpy as np
+        dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        pose_detector.detect(dummy_frame)
+
         from utils.async_camera import AsyncCameraPose
         self._async_camera = AsyncCameraPose(
             camera_idx=cam_cfg.get("device_id", 0),
@@ -2510,8 +2518,11 @@ class GameEngine:
                     FOOTER_H = 30
                     rp_w = disp_w - disp_w // 2
                     rp_h = disp_h - HEADER_H - FOOTER_H
+                    
+                    total_frames = self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_COUNT)
                     vid_w = int(self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
                     vid_h = int(self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
+                    
                     if vid_w > 0 and vid_h > 0:
                         vscale = min(rp_w / vid_w, rp_h / vid_h)
                         tw, th = int(vid_w * vscale), int(vid_h * vscale)
@@ -2520,6 +2531,14 @@ class GameEngine:
                             disp_w // 2 + (rp_w - tw) // 2,
                             HEADER_H + (rp_h - th) // 2,
                         )
+
+                    # [영상 길이 기반 duration 자동차단 패치]
+                    # metadata.json의 시간보다 영상이 짧을 때 검은 화면이 나오는 현상을 막아줍니다.
+                    if self._ref_video_fps > 0 and total_frames > 0:
+                        real_dur = total_frames / self._ref_video_fps
+                        current_dur = float(self._current_song.get("duration", real_dur))
+                        # 원본 길이보다 더 길면 잘라냅니다. (안전하게 0.15초 마진)
+                        self._current_song["duration"] = min(current_dur, real_dur - 0.15)
 
                     # 오디오 추출 및 프리로드 (Ogg Vorbis)
                     self._audio_path = video_path.rsplit('.', 1)[0] + ".ogg"
