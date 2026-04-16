@@ -80,6 +80,18 @@ class GameEngine:
         self._ready_pose_detected = False
         self._ready_full_body_start: float = 0.0  # 전신 감지 시작 시각
         self._ready_countdown: float = 0.0        # 전신 감지 후 카운트다운 (초)
+        # 키보드/마우스 포커스 (메뉴 네비게이션)
+        self._menu_focus_idx: int = 0        # 메뉴 화면 포커스 버튼 인덱스
+        self._song_focus_idx: int = 0        # 곡 선택 화면 포커스 인덱스
+        self._neon_tick: float = 0.0         # 네온 깜빡임 타이머
+        # 터치 더블탭 지원: 첫 탭=포커스, 두 번째 탭=실행
+        self._touch_focused_btn: str = ""    # 현재 터치-포커스된 버튼 이름
+        self._generic_focus_idx: int = 0     # PAUSED/RESULT/SETTINGS 화면 포커스 인덱스
+        self._last_event_type: str = "mouse" # 마지막 입력 이벤트 타입 ('mouse' | 'touch')
+        # 파티클 이펙트 (피드백 폭발 효과)
+        self._particles: list = []           # [{'x','y','vx','vy','life','max_life','color','size'}]
+        # 피드백 등장 후 경과 시간 (판정 애니메이션 progress 계산용)
+        self._feedback_age: float = 0.0      # 현재 피드백이 표시된 후 흐른 시간(초)
 
     def initialize(self):
         """
@@ -91,6 +103,8 @@ class GameEngine:
 
         pygame.init()
         pygame.mixer.init()
+        # 키보드 반복 입력: 200ms 후 첫 반복, 이후 80ms 간격
+        pygame.key.set_repeat(200, 80)
 
         # Display setup
         ui_cfg = self.config.get("ui", {})
@@ -204,62 +218,73 @@ class GameEngine:
 
         self.running = True
 
+        # ── 터미널 stdin 키보드 → pygame 이벤트 브리지 ──────────────
+        # pygame 창에 마우스/키보드 포커스가 없을 때,
+        # 터미널에서 입력한 키를 pygame 이벤트 큐로 주입한다.
+        # self.running = True 이후에 시작해야 루프가 즉시 종료되지 않는다.
+        self._start_stdin_key_bridge()
+
     @staticmethod
     def _load_fonts(pygame):
-        """한국어 지원 폰트를 로드합니다.
-        우선순위: ① 프로젝트 번들 폰트 → ② 시스템 경로 → ③ SysFont fallback
-        번들 폰트(assets/fonts/NotoSansKR.ttf)를 git에 포함시켜
-        어떤 OS/환경에서도 한글이 깨지지 않도록 합니다.
+        """폰트 로드.
+        - 영문/숫자/ASCII: PressStart2P.ttf (레트로 픽셀 감성)
+        - 한글 포함 텍스트: NotoSansKR.ttf (한글 지원)
+        두 폰트 모두 assets/fonts/ 에 번들로 포함.
         """
         import os
 
-        # ① 프로젝트 번들 폰트 (engine.py → src/game → src → project/assets/fonts)
         try:
             engine_dir   = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.dirname(os.path.dirname(engine_dir))
-            bundle_font  = os.path.join(project_root, "assets", "fonts", "NotoSansKR.ttf")
+            fonts_dir    = os.path.join(project_root, "assets", "fonts")
         except Exception:
-            bundle_font = ""
+            fonts_dir = ""
 
-        # ② 시스템 경로 후보 (라즈베리파이 / 우분투 / macOS / Windows)
-        system_candidates = [
-            # Linux (Raspberry Pi, Ubuntu)
+        retro_path = os.path.join(fonts_dir, "PressStart2P.ttf") if fonts_dir else ""
+        korean_path = os.path.join(fonts_dir, "NotoSansKR.ttf") if fonts_dir else ""
+
+        # 시스템 한글 폰트 후보 (번들 폰트 없을 시 fallback)
+        system_korean = [
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/opentype/noto/NotoSansCJKkr-Regular.otf",
-            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
-            # macOS
             "/Library/Fonts/NotoSansKR-Regular.otf",
-            "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
-            # Windows
-            "C:/Windows/Fonts/malgun.ttf",       # 맑은 고딕
-            "C:/Windows/Fonts/gulim.ttc",         # 굴림
+            "C:/Windows/Fonts/malgun.ttf",
         ]
 
-        font_path = None
-        # 번들 폰트 우선
-        if os.path.exists(bundle_font):
-            font_path = bundle_font
-            print(f"[FONT] 번들 폰트 사용: {bundle_font}")
+        if not os.path.exists(retro_path):
+            retro_path = None
+            print("[FONT] PressStart2P.ttf 없음 — SysFont fallback")
         else:
-            for p in system_candidates:
+            print(f"[FONT] 레트로 폰트: {retro_path}")
+
+        if not os.path.exists(korean_path):
+            korean_path = None
+            for p in system_korean:
                 if os.path.exists(p):
-                    font_path = p
-                    print(f"[FONT] 시스템 폰트 사용: {p}")
+                    korean_path = p
                     break
+            if korean_path:
+                print(f"[FONT] 한글 폰트: {korean_path}")
+            else:
+                print("[FONT] 한글 폰트를 찾지 못했습니다.")
 
-        if font_path is None:
-            print("[FONT] 한글 폰트를 찾지 못했습니다. 한글이 깨질 수 있습니다.")
-
-        def make(size, bold=False):
-            if font_path:
+        def make_retro(size):
+            """영문/숫자용 레트로 픽셀 폰트."""
+            if retro_path:
                 try:
-                    return pygame.font.Font(font_path, size)
+                    return pygame.font.Font(retro_path, size)
                 except Exception as e:
-                    print(f"[FONT] 폰트 로드 실패 ({font_path}): {e}")
-            # ③ SysFont fallback
-            for name in ["notosanscjkkr", "notosanscjk", "malgun gothic",
-                         "applegothic", "nanum gothic", "sans"]:
+                    print(f"[FONT] 레트로 폰트 로드 실패: {e}")
+            return pygame.font.SysFont(None, size)
+
+        def make_korean(size, bold=False):
+            """한글 포함 텍스트용 폰트."""
+            if korean_path:
+                try:
+                    return pygame.font.Font(korean_path, size)
+                except Exception as e:
+                    print(f"[FONT] 한글 폰트 로드 실패: {e}")
+            for name in ["notosanscjkkr", "notosanscjk", "nanum gothic", "malgun gothic", "sans"]:
                 try:
                     f = pygame.font.SysFont(name, size, bold=bold)
                     if f:
@@ -269,14 +294,136 @@ class GameEngine:
             return pygame.font.SysFont(None, size)
 
         return {
-            "title":     make(50, bold=True),
-            "menu":      make(34),
-            "score":     make(46, bold=True),
-            "body":      make(24),
-            "feedback":  make(68, bold=True),
-            "countdown": make(110, bold=True),
-            "small":     make(19),
+            # 레트로 픽셀 (영문/숫자 전용): 타이틀, 점수, 피드백 등급
+            "title":        make_retro(28),    # 메뉴 타이틀 "Let's Dance!"
+            "score":        make_retro(28),    # 게임 중 점수
+            "feedback":     make_retro(72),    # PERFECT / GREAT 등급 텍스트 (크게)
+            "countdown":    make_retro(72),    # 카운트다운 숫자
+            "result_big":   make_retro(22),    # 결과 화면 제목
+            "small_retro":  make_retro(14),    # 소형 레이블 (ME / GUIDE / 버튼 등)
+            "btn_retro":    make_retro(16),    # 헤더 버튼 (PAUSE / MENU)
+            # 한글 포함: 메뉴 버튼, 안내 텍스트
+            "menu":         make_korean(32),
+            "body":         make_korean(22),
+            "small":        make_korean(17),
         }
+
+    def _start_stdin_key_bridge(self):
+        """터미널 stdin → pygame 이벤트 브리지 (백그라운드 스레드).
+
+        MobaXterm / VS Code SSH 터미널에서 키를 누르면 pygame.KEYDOWN 이벤트로
+        변환해 큐에 주입한다.  pygame 창에 포커스가 없어도 키 제어 가능.
+
+        지원 키 (raw 모드):
+          방향키 (↑↓←→), Enter, ESC, W/A/S/D, P, Q, Space
+        raw 모드 불가 시 줄 입력(line) 모드로 자동 전환:
+          w/s/a/d/up/down/left/right/p/q/esc + Enter
+        """
+        import threading, sys, os as _os, termios, select
+
+        def _post(key):
+            import pygame
+            try:
+                pygame.event.post(pygame.event.Event(
+                    pygame.KEYDOWN, key=key, mod=0, unicode='', scancode=0))
+            except Exception:
+                pass
+
+        ARROW = {b'A': 'K_UP', b'B': 'K_DOWN', b'C': 'K_RIGHT', b'D': 'K_LEFT'}
+        RAW_MAP = {
+            b'\r':    'K_RETURN', b'\n': 'K_RETURN',
+            b' ':     'K_SPACE',
+            b'w':     'K_UP',    b'W': 'K_UP',
+            b's':     'K_DOWN',  b'S': 'K_DOWN',
+            b'a':     'K_LEFT',  b'A': 'K_LEFT',
+            b'd':     'K_RIGHT', b'D': 'K_RIGHT',
+            b'p':     'K_p',     b'P': 'K_p',
+            b'q':     'K_q',     b'Q': 'K_q',
+        }
+        LINE_MAP = {
+            '':       'K_RETURN',
+            'w':      'K_UP',    'up':    'K_UP',
+            's':      'K_DOWN',  'down':  'K_DOWN',
+            'a':      'K_LEFT',  'left':  'K_LEFT',
+            'd':      'K_RIGHT', 'right': 'K_RIGHT',
+            'p':      'K_p',     'pause': 'K_p',
+            'q':      'K_q',     'quit':  'K_q',
+            'esc':    'K_ESCAPE','escape':'K_ESCAPE',
+        }
+
+        def _read_keys():
+            import pygame
+            fd = sys.stdin.fileno()
+
+            # ── raw 모드 시도 ──────────────────────────────────────
+            try:
+                old_attr = termios.tcgetattr(fd)
+            except Exception:
+                return   # stdin이 TTY가 아니면 종료
+
+            try:
+                new_attr = termios.tcgetattr(fd)
+                # IFLAG: 입력 처리 끄기
+                new_attr[0] = 0
+                # LFLAG: echo, canonical, 시그널 끄기
+                new_attr[3] = new_attr[3] & ~(
+                    termios.ECHO | termios.ICANON |
+                    termios.IEXTEN | termios.ISIG)
+                # cc: VMIN=1 (1바이트씩), VTIME=0 (즉시)
+                new_attr[6][termios.VMIN]  = 1
+                new_attr[6][termios.VTIME] = 0
+                termios.tcsetattr(fd, termios.TCSANOW, new_attr)
+                use_raw = True
+            except Exception:
+                use_raw = False
+
+            try:
+                if use_raw:
+                    while self.running:
+                        # 0.1초 타임아웃으로 select → running 변화 감지
+                        r, _, _ = select.select([sys.stdin], [], [], 0.1)
+                        if not r:
+                            continue
+                        ch = _os.read(fd, 1)
+                        if not ch:
+                            break
+
+                        if ch == b'\x1b':
+                            # ANSI 시퀀스 판별 (방향키)
+                            r2, _, _ = select.select([sys.stdin], [], [], 0.05)
+                            if r2:
+                                ch2 = _os.read(fd, 1)
+                                if ch2 == b'[':
+                                    r3, _, _ = select.select([sys.stdin], [], [], 0.05)
+                                    if r3:
+                                        ch3 = _os.read(fd, 1)
+                                        name = ARROW.get(ch3)
+                                        if name:
+                                            _post(getattr(pygame, name))
+                                        continue
+                                # ESC + 다른 문자 → ESC 처리
+                            _post(pygame.K_ESCAPE)
+                        else:
+                            name = RAW_MAP.get(ch)
+                            if name:
+                                _post(getattr(pygame, name))
+                else:
+                    # ── 줄 입력 fallback ──────────────────────────
+                    for line in sys.stdin:
+                        if not self.running:
+                            break
+                        name = LINE_MAP.get(line.strip().lower())
+                        if name:
+                            _post(getattr(pygame, name))
+            finally:
+                if use_raw:
+                    try:
+                        termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
+                    except Exception:
+                        pass
+
+        t = threading.Thread(target=_read_keys, daemon=True, name="stdin-key-bridge")
+        t.start()
 
     def _load_songs(self) -> list:
         """data/reference_dances/ 폴더를 스캔해 곡 목록을 반환합니다."""
@@ -374,70 +521,190 @@ class GameEngine:
         """Process user input events (keyboard, mouse, touch)."""
         import pygame
 
+        # ── 화면별 포커스 버튼 목록 정의 ──────────────────────────────
+        # 방향키로 순환 가능한 버튼 순서를 화면별로 고정.
+        # 'b' / ESC 는 별도 처리 (뒤로가기).
+        FOCUS_LISTS = {
+            GameState.MENU: [
+                "btn_practice", "btn_challenge", "btn_freestyle",
+                "btn_settings", "btn_quit",
+            ],
+            GameState.SONG_SELECT: None,   # 곡 수가 동적이므로 런타임 생성
+            GameState.PAUSED: ["btn_pause", "btn_gameplay_menu"],
+            GameState.RESULT: ["btn_retry", "btn_result_menu"],
+            GameState.SETTINGS: ["btn_back"],
+        }
+
+        def _get_focus_list():
+            if self.state == GameState.SONG_SELECT:
+                songs = self._songs_for_mode(self._current_mode)
+                return [f"btn_song_{i}" for i in range(len(songs))] + \
+                       ["btn_song_start", "btn_song_back"]
+            return FOCUS_LISTS.get(self.state, [])
+
+        def _focus_count():
+            return len(_get_focus_list())
+
+        def _get_focus_idx():
+            if self.state == GameState.MENU:
+                return self._menu_focus_idx
+            if self.state == GameState.SONG_SELECT:
+                return self._song_focus_idx
+            return getattr(self, '_generic_focus_idx', 0)
+
+        def _set_focus_idx(idx):
+            fl = _get_focus_list()
+            if not fl:
+                return
+            idx = idx % len(fl)
+            if self.state == GameState.MENU:
+                self._menu_focus_idx = idx
+            elif self.state == GameState.SONG_SELECT:
+                self._song_focus_idx = idx
+                # 곡 항목일 때만 selected 갱신
+                songs = self._songs_for_mode(self._current_mode)
+                if idx < len(songs):
+                    self._selected_song_idx = idx
+            else:
+                self._generic_focus_idx = idx
+
+        def _press_focused():
+            fl = _get_focus_list()
+            if not fl:
+                return
+            idx = _get_focus_idx() % max(len(fl), 1)
+            btn = fl[idx]
+            self._on_button_press(btn)
+
+        def _go_back():
+            """B키 / ESC 뒤로가기."""
+            if self.state in (GameState.SONG_SELECT, GameState.SETTINGS):
+                self.transition_to(GameState.MENU)
+            elif self.state in (GameState.READY, GameState.COUNTDOWN):
+                self.transition_to(GameState.SONG_SELECT)
+            elif self.state == GameState.PAUSED:
+                self.transition_to(GameState.PLAYING)
+            elif self.state in (GameState.PLAYING,):
+                self.transition_to(GameState.PAUSED)
+            elif self.state == GameState.RESULT:
+                self.transition_to(GameState.MENU)
+            elif self.state == GameState.MENU:
+                self.running = False
+
         for event in pygame.event.get():
-            # ── 창 닫기 ──────────────────────────────────────
+            # ── 창 닫기 ────────────────────────────────────────
             if event.type == pygame.QUIT:
                 self.running = False
                 return
 
-            # ── 키보드 ────────────────────────────────────────
+            # ── 마우스 이동 → 포커스 이동 ──────────────────────
+            elif event.type == pygame.MOUSEMOTION:
+                fl = _get_focus_list()
+                for i, k in enumerate(fl):
+                    if k in self._btn_rects and self._btn_rects[k].collidepoint(event.pos):
+                        _set_focus_idx(i)
+                        break
+
+            # ── 키보드 ──────────────────────────────────────────
             if event.type == pygame.KEYDOWN:
+
+                # ESC → 뒤로가기
                 if event.key == pygame.K_ESCAPE:
-                    if self.state in (GameState.PLAYING, GameState.PAUSED,
-                                      GameState.SETTINGS, GameState.RESULT,
-                                      GameState.COUNTDOWN, GameState.READY):
-                        self.transition_to(GameState.MENU)
-                    else:
-                        self.running = False
+                    _go_back()
 
+                # B → 뒤로가기
+                elif event.key == pygame.K_b:
+                    _go_back()
+
+                # Q → 종료
+                elif event.key == pygame.K_q:
+                    self.running = False
+
+                # ↓ / → : 다음 항목
+                elif event.key in (pygame.K_DOWN, pygame.K_RIGHT):
+                    cnt = _focus_count()
+                    if cnt:
+                        _set_focus_idx(_get_focus_idx() + 1)
+
+                # ↑ / ← : 이전 항목
+                elif event.key in (pygame.K_UP, pygame.K_LEFT):
+                    cnt = _focus_count()
+                    if cnt:
+                        _set_focus_idx(_get_focus_idx() - 1)
+
+                # Enter / Space → 선택 확정
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    if self.state == GameState.MENU:
-                        self.transition_to(GameState.READY)
-                    elif self.state == GameState.SONG_SELECT:
-                        self.transition_to(GameState.READY)
-                    elif self.state == GameState.PAUSED:
-                        self.transition_to(GameState.PLAYING)
-                    elif self.state == GameState.RESULT:
-                        self.transition_to(GameState.MENU)
+                    _press_focused()
 
+                # P → 게임 중 일시정지 토글
                 elif event.key == pygame.K_p:
                     if self.state == GameState.PLAYING:
                         self.transition_to(GameState.PAUSED)
                     elif self.state == GameState.PAUSED:
                         self.transition_to(GameState.PLAYING)
 
-                elif event.key == pygame.K_1:
-                    if self.state == GameState.MENU:
-                        self.transition_to(GameState.COUNTDOWN)
-                elif event.key == pygame.K_s:
-                    if self.state == GameState.MENU:
-                        self.transition_to(GameState.SETTINGS)
-                elif event.key == pygame.K_q:
-                    self.running = False
-
-            # ── 마우스/터치 클릭 (MOUSEBUTTONDOWN = 터치 포함) ──
+            # ── 마우스/터치 클릭 ────────────────────────────────
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                self._handle_click(event.pos)
+                if not getattr(self, '_finger_handled', False):
+                    self._last_event_type = 'mouse'
+                    self._handle_click(event.pos)
+                self._finger_handled = False
 
-            # ── 핑거(멀티터치) 이벤트 – SDL2 터치스크린 ──────────
+            # ── 핑거(터치스크린 전용) 이벤트 ──────────────────────
             elif event.type == pygame.FINGERDOWN:
-                w, h = self._display.get_size()
-                touch_pos = (int(event.x * w), int(event.y * h))
+                w_d, h_d = self._display.get_size()
+                touch_pos = (int(event.x * w_d), int(event.y * h_d))
+                self._last_event_type = 'touch'
+                self._finger_handled = True   # 뒤따라오는 MOUSEBUTTONDOWN 무시
                 self._handle_click(touch_pos)
 
     def _handle_click(self, pos: tuple):
         """
-        터치/마우스 클릭 좌표를 받아 현재 화면의 버튼과 충돌 검사 후 처리.
+        터치/마우스 클릭 처리.
 
-        Args:
-            pos: (x, y) 클릭/터치 좌표
+        MENU / SONG_SELECT 상태에서는 더블탭 방식:
+          - 1st click: 해당 버튼에 포커스만 이동 (하이라이트)
+          - 2nd click (같은 버튼): 실제 액션 실행
+        다른 상태(PLAYING, PAUSED 등)에서는 단일 클릭으로 즉시 실행.
+
+        MOUSEMOTION으로 이미 hover된 버튼은 이미 focused 상태이므로
+        마우스 클릭 시 즉시 실행된다.
         """
-        import pygame
+        double_tap_states = (GameState.MENU, GameState.SONG_SELECT)
 
         for btn_name, rect in self._btn_rects.items():
-            if rect.collidepoint(pos):
+            if not rect.collidepoint(pos):
+                continue
+
+            if self.state in double_tap_states:
+                if self._touch_focused_btn != btn_name:
+                    # 1st tap → 포커스만
+                    self._touch_focused_btn = btn_name
+                    self._sync_focus_to_btn(btn_name)
+                else:
+                    # 2nd tap → 실행
+                    self._touch_focused_btn = ""
+                    self._on_button_press(btn_name)
+            else:
+                # 게임 중/일시정지/결과 등: 즉시 실행
+                self._touch_focused_btn = ""
                 self._on_button_press(btn_name)
-                return
+            return
+
+    def _sync_focus_to_btn(self, btn_name: str):
+        """버튼 이름에 해당하는 포커스 인덱스를 갱신한다 (터치 첫 탭 시 시각적 하이라이트용)."""
+        menu_keys = ["btn_practice", "btn_challenge", "btn_freestyle",
+                     "btn_settings", "btn_quit"]
+        if btn_name in menu_keys:
+            self._menu_focus_idx = menu_keys.index(btn_name)
+            return
+        if btn_name.startswith("btn_song_"):
+            try:
+                idx = int(btn_name.split("_")[-1])
+                self._song_focus_idx = idx
+                self._selected_song_idx = idx
+            except ValueError:
+                pass
 
     def _on_button_press(self, btn_name: str):
         """버튼 이름에 따라 액션 실행."""
@@ -501,12 +768,19 @@ class GameEngine:
 
     def _update(self):
         """Update game state based on current state."""
+        # 네온 깜빡임 타이머 (항상 업데이트)
+        self._neon_tick += 1.0 / self.TARGET_FPS
+
+        # 피드백 나이 타이머 (등장 후 경과시간, 애니메이션 progress용)
+        if self._last_feedback is not None:
+            self._feedback_age += 1.0 / self.TARGET_FPS
+
         if self.state == GameState.READY:
             self._update_ready()
 
         elif self.state == GameState.COUNTDOWN:
             elapsed = time.time() - self._countdown_start
-            remaining = 5 - int(elapsed)
+            remaining = 2 - int(elapsed)
             if remaining < 0:
                 self.transition_to(GameState.PLAYING)
             else:
@@ -717,6 +991,15 @@ class GameEngine:
             if fb:
                 self._last_feedback = fb
                 self._feedback_timer = 1.2  # 1.2초 동안 표시
+                self._feedback_age   = 0.0  # 애니메이션 경과 시간 리셋
+                # 파티클 폭발 효과 — fb["text"]로 등급 판단
+                text = fb.get("text", "")
+                particle_map = {"PERFECT!": 60, "GREAT!": 40, "GOOD": 25}
+                particle_count = particle_map.get(text, 0)
+                if particle_count > 0 and self._display is not None:
+                    w_d, h_d = self._display.get_size()
+                    color = fb.get("color", (255, 255, 255))
+                    self._spawn_particles(w_d // 2, h_d // 2, color, particle_count)
         else:
             self._feedback_gen.update()
 
@@ -762,247 +1045,343 @@ class GameEngine:
         pygame.display.flip()
 
     def _render_menu(self, w, h):
-        """Render the main menu."""
+        """Render the main menu — retro-fancy neon style."""
         import pygame
+        import math
 
-        # Gradient background
-        self._display.fill((15, 10, 40))
+        tick = self._neon_tick
+
+        # ── 배경: 따뜻한 보라→핑크 그라데이션 ──────────────────
         for y in range(h):
-            alpha = y / h
-            color = (int(15 + 20 * alpha), int(10 + 10 * alpha), int(40 + 30 * alpha))
-            pygame.draw.line(self._display, color, (0, y), (w, y))
+            t = y / h
+            r = int(28 + 20 * t)
+            g = int(8  + 8  * t)
+            b = int(55 + 25 * t)
+            pygame.draw.line(self._display, (r, g, b), (0, y), (w, y))
 
-        # ── 레이아웃 계산 (동적으로 간격 분배) ──
-        MARGIN_TOP = 30           # 상단 여백
-        MARGIN_BOTTOM = 40        # 하단 여백 (footer 포함)
-        FOOTER_H = 28             # 조작 안내 영역
-        BTN_H = 52                # 모드 버튼 높이
-        SMALL_BTN_H = 44          # 설정/종료 버튼 높이
-        BTN_W = min(420, w - 60)  # 버튼 너비 (화면에 맞춤)
-        SMALL_BTN_W = min(195, (BTN_W - 20) // 2)  # 하단 작은 버튼 너비
+        # 배경 격자선 (레트로 느낌)
+        grid_color = (50, 20, 80)
+        for gx in range(0, w, 60):
+            pygame.draw.line(self._display, grid_color, (gx, 0), (gx, h))
+        for gy in range(0, h, 60):
+            pygame.draw.line(self._display, grid_color, (0, gy), (w, gy))
 
-        # 세로 섹션: 타이틀(제목+부제) | 모드 버튼 ×3 | 하단 버튼 | 푸터
-        title_area_h = 100        # 타이틀 + 부제 공간
-        bottom_area_h = SMALL_BTN_H + FOOTER_H + 10  # 하단 버튼 + 푸터
+        # ── 레이아웃 ─────────────────────────────────────────────
+        MARGIN_TOP    = 24
+        BTN_H         = 54
+        BTN_W         = min(440, w - 60)
+        SMALL_BTN_H   = 42
+        SMALL_BTN_W   = min(190, (BTN_W - 20) // 2)
+        FOOTER_H      = 26
+        MARGIN_BOTTOM = 36
+        title_area_h  = 110
 
-        # 모드 버튼 영역
-        mode_area_top = MARGIN_TOP + title_area_h + 20
-        mode_area_bottom = h - MARGIN_BOTTOM - bottom_area_h - 10
-        mode_area_h = mode_area_bottom - mode_area_top
+        mode_area_top    = MARGIN_TOP + title_area_h + 16
+        bottom_area_h    = SMALL_BTN_H + FOOTER_H + 14
+        mode_area_bottom = h - MARGIN_BOTTOM - bottom_area_h
+        mode_area_h      = mode_area_bottom - mode_area_top
+        num_btns         = 3
+        gap              = max(14, (mode_area_h - num_btns * BTN_H) // (num_btns + 1))
+        btn_start_y      = mode_area_top + (mode_area_h - (num_btns * BTN_H + gap * (num_btns - 1))) // 2
+        btn_x            = w // 2 - BTN_W // 2
 
-        # 버튼 3개를 영역 안에 균등 배치
-        num_btns = 3
-        total_btn_h = num_btns * BTN_H
-        gap = max(12, (mode_area_h - total_btn_h) // (num_btns + 1))
+        # ── 타이틀 ───────────────────────────────────────────────
+        neon_cyan = self._neon_color((80, 255, 220), tick)
+        title_surf = self._fonts["title"].render("Let's Dance!", True, neon_cyan)
+        # 타이틀 글로우 (살짝 번짐)
+        glow_surf = self._fonts["title"].render("Let's Dance!", True, (30, 120, 100))
+        for dx, dy in [(-2,0),(2,0),(0,-2),(0,2)]:
+            self._display.blit(glow_surf, glow_surf.get_rect(
+                center=(w // 2 + dx, MARGIN_TOP + 38 + dy)))
+        self._display.blit(title_surf, title_surf.get_rect(center=(w // 2, MARGIN_TOP + 38)))
 
-        btn_start_y = mode_area_top + (mode_area_h - (total_btn_h + gap * (num_btns - 1))) // 2
+        sub_color = self._neon_color((230, 160, 255), tick, intensity=0.9)
+        sub = self._fonts["body"].render("* AI DANCE SCORE GAME *", True, sub_color)
+        self._display.blit(sub, sub.get_rect(center=(w // 2, MARGIN_TOP + 82)))
 
-        # Title
-        title = self._fonts["title"].render("Let's Dance!", True, (0, 255, 200))
-        title_rect = title.get_rect(center=(w // 2, MARGIN_TOP + 35))
-        self._display.blit(title, title_rect)
+        # 구분선
+        line_col = self._neon_color((180, 80, 255), tick, 0.7)
+        pygame.draw.line(self._display, line_col,
+                         (w//2 - BTN_W//2, MARGIN_TOP + 100),
+                         (w//2 + BTN_W//2, MARGIN_TOP + 100), 1)
 
-        # Subtitle
-        sub = self._fonts["body"].render("AI 댄스 채점 게임", True, (180, 180, 220))
-        sub_rect = sub.get_rect(center=(w // 2, MARGIN_TOP + 80))
-        self._display.blit(sub, sub_rect)
-
-        # Menu 버튼 정의 (btn_name, label, color)
+        # ── 모드 버튼 ────────────────────────────────────────────
+        mouse_pos = pygame.mouse.get_pos()
         btn_defs = [
-            ("btn_practice",  "1. 연습 모드 (Practice)",  (0, 180, 130)),
-            ("btn_challenge", "2. 도전 모드 (Challenge)", (200, 140, 0)),
-            ("btn_freestyle", "3. 자유 모드 (Freestyle)", (140, 80, 210)),
+            ("btn_practice",  "PRACTICE",  (0, 220, 180),   (0, 80, 60)),
+            ("btn_challenge", "CHALLENGE", (255, 190, 0),   (90, 60, 0)),
+            ("btn_freestyle", "FREE STYLE",(200, 100, 255), (70, 20, 100)),
         ]
 
-        mouse_pos = pygame.mouse.get_pos()
-        btn_x = w // 2 - BTN_W // 2
-
-        for i, (btn_name, label, color) in enumerate(btn_defs):
-            y_pos = btn_start_y + i * (BTN_H + gap)
-            rect = pygame.Rect(btn_x, y_pos, BTN_W, BTN_H)
+        for i, (btn_name, label, neon_col, fill_col) in enumerate(btn_defs):
+            y_pos  = btn_start_y + i * (BTN_H + gap)
+            rect   = pygame.Rect(btn_x, y_pos, BTN_W, BTN_H)
             self._btn_rects[btn_name] = rect
 
-            # 호버/터치 시 밝게
-            hover = rect.collidepoint(mouse_pos)
-            draw_color = tuple(min(c + 50, 255) for c in color) if hover else color
-            pygame.draw.rect(self._display, draw_color, rect, border_radius=14)
-            pygame.draw.rect(self._display, (255, 255, 255), rect, 2, border_radius=14)
-            lbl_surf = self._fonts["body"].render(label, True, (255, 255, 255))
-            self._display.blit(lbl_surf, lbl_surf.get_rect(center=rect.center))
+            focused = (i == self._menu_focus_idx)
+            hover   = rect.collidepoint(mouse_pos)
+            active  = focused or hover
 
-        # 설정 / 종료 버튼 (하단, 좌우 대칭 배치)
+            # 배경 채우기
+            if active:
+                bg_alpha_surf = pygame.Surface((BTN_W, BTN_H), pygame.SRCALPHA)
+                bg_alpha_surf.fill((*fill_col, 180))
+                self._display.blit(bg_alpha_surf, rect.topleft)
+            else:
+                bg_alpha_surf = pygame.Surface((BTN_W, BTN_H), pygame.SRCALPHA)
+                bg_alpha_surf.fill((20, 10, 40, 160))
+                self._display.blit(bg_alpha_surf, rect.topleft)
+
+            # 네온 테두리 + 글로우
+            border_col = self._neon_color(neon_col, tick) if active else \
+                         tuple(c // 3 for c in neon_col)
+            self._draw_neon_rect(self._display, rect, border_col,
+                                 width=2, radius=14,
+                                 glow_radius=10 if active else 3)
+
+            # 포커스/호버 시 모서리 브래킷
+            if active:
+                bracket_col = self._neon_color(neon_col, tick * 2)
+                self._draw_corner_brackets(self._display, rect, bracket_col,
+                                           size=16, width=3)
+
+            # 레이블
+            txt_color = (255, 255, 255) if active else (180, 170, 200)
+            lbl = self._fonts["body"].render(label, True, txt_color)
+            self._display.blit(lbl, lbl.get_rect(center=rect.center))
+
+        # ── 설정 / 종료 버튼 ────────────────────────────────────
         bottom_btn_y = h - MARGIN_BOTTOM - FOOTER_H - SMALL_BTN_H - 4
-        btn_gap = 20
-        total_small_w = SMALL_BTN_W * 2 + btn_gap
-        small_x = w // 2 - total_small_w // 2
+        btn_gap      = 20
+        total_sw     = SMALL_BTN_W * 2 + btn_gap
+        small_x      = w // 2 - total_sw // 2
 
         btn_s_rect = pygame.Rect(small_x, bottom_btn_y, SMALL_BTN_W, SMALL_BTN_H)
-        btn_q_rect = pygame.Rect(small_x + SMALL_BTN_W + btn_gap, bottom_btn_y, SMALL_BTN_W, SMALL_BTN_H)
+        btn_q_rect = pygame.Rect(small_x + SMALL_BTN_W + btn_gap,
+                                 bottom_btn_y, SMALL_BTN_W, SMALL_BTN_H)
         self._btn_rects["btn_settings"] = btn_s_rect
         self._btn_rects["btn_quit"]     = btn_q_rect
 
-        for rect, label, color in [
-            (btn_s_rect, "설정",  (80, 80, 160)),
-            (btn_q_rect, "종료",  (160, 60, 60)),
-        ]:
-            hover = rect.collidepoint(mouse_pos)
-            draw_color = tuple(min(c + 40, 255) for c in color) if hover else color
-            pygame.draw.rect(self._display, draw_color, rect, border_radius=12)
-            pygame.draw.rect(self._display, (200, 200, 200), rect, 2, border_radius=12)
-            lbl_surf = self._fonts["body"].render(label, True, (255, 255, 255))
-            self._display.blit(lbl_surf, lbl_surf.get_rect(center=rect.center))
+        small_defs = [
+            (btn_s_rect, "btn_settings", "SETTINGS", (100, 120, 255), 3),
+            (btn_q_rect, "btn_quit",     "QUIT",     (255, 80,  80),  4),
+        ]
+        for rect, bname, label, ncol, focus_i in small_defs:
+            focused = (self._menu_focus_idx == focus_i)
+            hover   = rect.collidepoint(mouse_pos)
+            active  = focused or hover
 
-        # 조작 안내 (화면 하단)
+            bg_alpha = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+            fill = tuple(c // 3 for c in ncol)
+            bg_alpha.fill((*fill, 200 if active else 120))
+            self._display.blit(bg_alpha, rect.topleft)
+
+            bcol = self._neon_color(ncol, tick) if active else tuple(c // 2 for c in ncol)
+            self._draw_neon_rect(self._display, rect, bcol,
+                                 width=2, radius=12,
+                                 glow_radius=8 if active else 2)
+            if active:
+                self._draw_corner_brackets(self._display, rect,
+                                           self._neon_color(ncol, tick * 2), size=10, width=2)
+            lbl = self._fonts["small"].render(label, True,
+                                              (255, 255, 255) if active else (160, 155, 180))
+            self._display.blit(lbl, lbl.get_rect(center=rect.center))
+
+        # ── 푸터 ─────────────────────────────────────────────────
+        footer_col = (140, 110, 180)
         footer = self._fonts["small"].render(
-            "Enter/Space: 시작  |  P: 일시정지  |  ESC: 종료", True, (100, 100, 130)
+            "UP/DOWN: SELECT   ENTER: CONFIRM   ESC: QUIT", True, footer_col
         )
-        self._display.blit(footer, footer.get_rect(center=(w // 2, h - MARGIN_BOTTOM // 2 - 2)))
+        self._display.blit(footer, footer.get_rect(
+            center=(w // 2, h - MARGIN_BOTTOM // 2 - 2)))
 
     def _render_song_select(self, w, h):
-        """곡 선택 화면을 렌더링합니다."""
+        """곡 선택 화면 — retro-fancy neon style."""
         import pygame
+        import math
 
-        MODE_LABELS = {
-            "practice":  "연습 모드",
-            "challenge": "도전 모드",
-            "freestyle": "자유 모드",
-        }
-        DIFF_STARS = {0: "자유", 1: "★☆☆", 2: "★★☆", 3: "★★★"}
+        tick = self._neon_tick
 
-        HEADER_H = 56
-        FOOTER_H = 36          # 뒤로가기 + 조작 안내 영역
-        BOTTOM_MARGIN = 56     # 뒤로가기 버튼 + 여백
-        BODY_TOP = HEADER_H + 10
-        BODY_BOTTOM = h - BOTTOM_MARGIN - FOOTER_H
+        MODE_LABELS = {"practice": "PRACTICE", "challenge": "CHALLENGE", "freestyle": "FREE STYLE"}
+        DIFF_STARS  = {0: "FREE", 1: "★☆☆☆☆", 2: "★★☆☆☆", 3: "★★★☆☆", 4: "★★★★☆", 5: "★★★★★"}
+        MODE_COLORS = {"practice": (0, 220, 180), "challenge": (255, 190, 0),
+                       "freestyle": (200, 100, 255)}
+        mode_col    = MODE_COLORS.get(self._current_mode, (180, 180, 255))
 
-        self._display.fill((12, 8, 35))
+        HEADER_H      = 58
+        FOOTER_H      = 34
+        BOTTOM_MARGIN = 54
+        BODY_TOP      = HEADER_H + 12
+        BODY_BOTTOM   = h - BOTTOM_MARGIN - FOOTER_H
 
-        # 헤더
-        header_bg = pygame.Rect(0, 0, w, HEADER_H)
-        pygame.draw.rect(self._display, (25, 18, 60), header_bg)
-        title_txt = self._fonts["menu"].render(
-            f"{MODE_LABELS.get(self._current_mode, '')}  —  곡 선택", True, (200, 200, 255)
-        )
-        self._display.blit(title_txt, title_txt.get_rect(midleft=(20, HEADER_H // 2)))
+        # 배경 그라데이션
+        for y in range(h):
+            t = y / h
+            pygame.draw.line(self._display, (int(22 + 16*t), int(8 + 8*t), int(50 + 20*t)),
+                             (0, y), (w, y))
+        # 배경 격자
+        for gx in range(0, w, 60):
+            pygame.draw.line(self._display, (45, 18, 70), (gx, 0), (gx, h))
+        for gy in range(0, h, 60):
+            pygame.draw.line(self._display, (45, 18, 70), (0, gy), (w, gy))
 
-        songs = self._songs_for_mode(self._current_mode)
+        # ── 헤더 ─────────────────────────────────────────────────
+        hdr_surf = pygame.Surface((w, HEADER_H), pygame.SRCALPHA)
+        hdr_surf.fill((15, 8, 40, 220))
+        self._display.blit(hdr_surf, (0, 0))
+        pygame.draw.line(self._display, self._neon_color(mode_col, tick, 0.8),
+                         (0, HEADER_H - 1), (w, HEADER_H - 1), 2)
+
+        mode_label = MODE_LABELS.get(self._current_mode, "")
+        hdr_neon   = self._neon_color(mode_col, tick)
+        hdr_txt    = self._fonts["menu"].render(f"{mode_label}  --  SELECT SONG", True, hdr_neon)
+        self._display.blit(hdr_txt, hdr_txt.get_rect(midleft=(18, HEADER_H // 2)))
+
+        songs     = self._songs_for_mode(self._current_mode)
         mouse_pos = pygame.mouse.get_pos()
 
         if not songs:
-            msg = self._fonts["body"].render("이 모드에서 플레이 가능한 곡이 없습니다.", True, (180, 100, 100))
+            msg = self._fonts["body"].render("No songs available for this mode.", True, (255, 120, 120))
             self._display.blit(msg, msg.get_rect(center=(w // 2, h // 2)))
         else:
-            # ── 곡 카드 목록 (왼쪽 54%) ──
-            card_area_w = int(w * 0.54)
-            card_w = card_area_w - 40
-            card_x = 20
-            card_start_y = BODY_TOP
-            available_h = BODY_BOTTOM - card_start_y
-
-            # 카드 높이와 간격을 곡 수에 따라 동적 계산
-            num_songs = len(songs)
-            card_h = min(68, max(48, (available_h - 10 * num_songs) // max(num_songs, 1)))
-            card_gap = min(10, max(4, (available_h - card_h * num_songs) // max(num_songs, 1)))
+            # ── 곡 카드 목록 (왼쪽 52%) ─────────────────────────
+            card_area_w = int(w * 0.52)
+            card_w      = card_area_w - 32
+            card_x      = 16
+            available_h = BODY_BOTTOM - BODY_TOP
+            num_songs   = len(songs)
+            card_h      = min(72, max(50, (available_h - 10 * num_songs) // max(num_songs, 1)))
+            card_gap    = min(10, max(5,  (available_h - card_h * num_songs) // max(num_songs, 1)))
 
             for i, song in enumerate(songs):
-                cy = card_start_y + i * (card_h + card_gap)
+                cy   = BODY_TOP + i * (card_h + card_gap)
                 if cy + card_h > BODY_BOTTOM:
-                    break  # 영역 초과 시 더 이상 표시하지 않음
+                    break
                 rect = pygame.Rect(card_x, cy, card_w, card_h)
                 self._btn_rects[f"btn_song_{i}"] = rect
 
                 selected = (i == self._selected_song_idx)
                 hover    = rect.collidepoint(mouse_pos) and not selected
+                active   = selected or hover
 
+                # 카드 배경
+                bg_surf = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
                 if selected:
-                    bg = (0, 140, 100)
-                    border = (0, 255, 180)
+                    bg_surf.fill((*[c // 4 for c in mode_col], 210))
                 elif hover:
-                    bg = (40, 35, 80)
-                    border = (120, 100, 200)
+                    bg_surf.fill((50, 30, 90, 180))
                 else:
-                    bg = (28, 22, 55)
-                    border = (60, 55, 100)
+                    bg_surf.fill((20, 14, 48, 160))
+                self._display.blit(bg_surf, rect.topleft)
 
-                pygame.draw.rect(self._display, bg,     rect, border_radius=12)
-                pygame.draw.rect(self._display, border, rect, 2, border_radius=12)
+                # 카드 테두리
+                if selected:
+                    self._draw_neon_rect(self._display, rect,
+                                         self._neon_color(mode_col, tick),
+                                         width=2, radius=12, glow_radius=10)
+                    self._draw_corner_brackets(self._display, rect,
+                                               self._neon_color(mode_col, tick * 2),
+                                               size=14, width=3)
+                elif hover:
+                    self._draw_neon_rect(self._display, rect, (160, 130, 220),
+                                         width=1, radius=12, glow_radius=4)
+                else:
+                    pygame.draw.rect(self._display, (60, 45, 100), rect, 1, border_radius=12)
 
                 # 곡 제목
-                title_s = self._fonts["body"].render(song.get("title", "?"), True, (255, 255, 255))
-                self._display.blit(title_s, (rect.x + 14, rect.y + 6))
+                title_col = (255, 255, 255) if active else (200, 195, 220)
+                t_surf = self._fonts["body"].render(song.get("title", "?"), True, title_col)
+                self._display.blit(t_surf, (rect.x + 14, rect.y + 8))
 
-                # BPM / 난이도
+                # 곡 정보
                 diff  = DIFF_STARS.get(song.get("difficulty", 0), "")
-                bpm   = song.get("bpm", 0)
-                dur   = song.get("duration", 0)
-                info  = f"BPM {bpm}  |  {dur}초  |  {diff}"
-                info_s = self._fonts["small"].render(info, True, (160, 160, 190))
-                self._display.blit(info_s, (rect.x + 14, rect.y + card_h - 24))
+                info  = f"BPM {song.get('bpm',0)}  ·  {song.get('duration',0)}s  ·  {diff}"
+                info_col = self._neon_color(mode_col, tick, 0.7) if selected else (130, 125, 160)
+                i_surf = self._fonts["small"].render(info, True, info_col)
+                self._display.blit(i_surf, (rect.x + 14, rect.y + card_h - 22))
 
-            # ── 선택된 곡 상세 패널 (오른쪽) ──
+            # ── 선택된 곡 상세 패널 (오른쪽) ─────────────────────
             if 0 <= self._selected_song_idx < len(songs):
-                sel = songs[self._selected_song_idx]
-                panel_x = card_area_w + 10
-                panel_w = w - panel_x - 16
-                start_btn_h = 48
-                start_btn_margin = 12
-                panel_y = BODY_TOP
-                panel_h = BODY_BOTTOM - panel_y
-                panel = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
-                pygame.draw.rect(self._display, (22, 18, 52), panel, border_radius=14)
-                pygame.draw.rect(self._display, (80, 70, 140), panel, 2, border_radius=14)
+                sel     = songs[self._selected_song_idx]
+                px      = card_area_w + 12
+                pw      = w - px - 14
+                start_h = 50
+                start_m = 14
+                panel   = pygame.Rect(px, BODY_TOP, pw, BODY_BOTTOM - BODY_TOP)
 
-                # 상세 항목들을 패널 안에 동적 배치
+                # 패널 배경
+                p_surf = pygame.Surface((pw, panel.height), pygame.SRCALPHA)
+                p_surf.fill((18, 10, 42, 210))
+                self._display.blit(p_surf, panel.topleft)
+
+                self._draw_neon_rect(self._display, panel,
+                                     self._neon_color(mode_col, tick, 0.6),
+                                     width=2, radius=14, glow_radius=6)
+                self._draw_corner_brackets(self._display, panel,
+                                           self._neon_color(mode_col, tick * 1.5),
+                                           size=18, width=2)
+
+                # 상세 정보
                 detail_items = [
-                    ("곡 제목",  sel.get("title", "-")),
-                    ("아티스트", sel.get("artist", "-")),
-                    ("BPM",     str(sel.get("bpm", 0))),
-                    ("길이",    f"{sel.get('duration', 0)}초"),
-                    ("난이도",  DIFF_STARS.get(sel.get("difficulty", 0), "-")),
-                    ("레퍼런스", "있음" if sel.get("has_reference") else "없음"),
+                    ("TITLE",    sel.get("title", "-")),
+                    ("ARTIST",   sel.get("artist", "-")),
+                    ("BPM",      str(sel.get("bpm", 0))),
+                    ("LENGTH",   f"{sel.get('duration', 0)}s"),
+                    ("LEVEL",    DIFF_STARS.get(sel.get("difficulty", 0), "-")),
                 ]
-                detail_area_h = panel_h - start_btn_h - start_btn_margin * 2 - 20
-                item_h = min(52, max(36, detail_area_h // max(len(detail_items), 1)))
-
+                avail_h   = panel.height - start_h - start_m * 2 - 16
+                item_h    = min(54, max(38, avail_h // max(len(detail_items), 1)))
                 py_detail = panel.y + 14
-                for label, val in detail_items:
-                    lbl_s = self._fonts["small"].render(label, True, (140, 140, 180))
-                    val_s = self._fonts["body"].render(str(val), True, (220, 220, 255))
+
+                for lbl_txt, val_txt in detail_items:
+                    lbl_s = self._fonts["small"].render(lbl_txt, True, (150, 140, 190))
+                    val_s = self._fonts["body"].render(str(val_txt), True,
+                                                        self._neon_color(mode_col, tick, 0.85))
                     self._display.blit(lbl_s, (panel.x + 16, py_detail))
-                    self._display.blit(val_s, (panel.x + 16, py_detail + 18))
+                    self._display.blit(val_s, (panel.x + 16, py_detail + 17))
                     py_detail += item_h
 
-                # 시작 버튼 (패널 하단에 고정)
-                start_rect = pygame.Rect(
-                    panel.x + 16,
-                    panel.y + panel_h - start_btn_h - start_btn_margin,
-                    panel_w - 32,
-                    start_btn_h,
-                )
+                # 시작 버튼
+                start_rect = pygame.Rect(panel.x + 16,
+                                         panel.y + panel.height - start_h - start_m,
+                                         pw - 32, start_h)
                 self._btn_rects["btn_song_start"] = start_rect
-                hover_s = start_rect.collidepoint(mouse_pos)
-                pygame.draw.rect(self._display,
-                                 (0, 190, 120) if hover_s else (0, 150, 90),
-                                 start_rect, border_radius=14)
-                pygame.draw.rect(self._display, (200, 255, 220), start_rect, 2, border_radius=14)
-                go_s = self._fonts["menu"].render("▶  시작하기", True, (255, 255, 255))
+                hover_s   = start_rect.collidepoint(mouse_pos)
+                focused_s = (self._song_focus_idx == len(songs))  # songs 다음 인덱스 = start
+
+                btn_bg = pygame.Surface((start_rect.width, start_rect.height), pygame.SRCALPHA)
+                btn_bg.fill((*[c // 3 for c in mode_col], 220 if (hover_s or focused_s) else 160))
+                self._display.blit(btn_bg, start_rect.topleft)
+                self._draw_neon_rect(self._display, start_rect,
+                                     self._neon_color(mode_col, tick),
+                                     width=2, radius=14, glow_radius=10 if (hover_s or focused_s) else 6)
+                if hover_s or focused_s:
+                    self._draw_corner_brackets(self._display, start_rect,
+                                               self._neon_color(mode_col, tick * 2),
+                                               size=14, width=3)
+                go_s = self._fonts["menu"].render("START!", True, (255, 255, 255))
                 self._display.blit(go_s, go_s.get_rect(center=start_rect.center))
 
-        # 뒤로가기 버튼 (하단 고정)
-        back_y = h - BOTTOM_MARGIN - FOOTER_H + 4
-        back_rect = pygame.Rect(16, back_y, 150, 40)
+        # ── 뒤로가기 버튼 ────────────────────────────────────────
+        back_y    = h - BOTTOM_MARGIN - FOOTER_H + 6
+        back_rect = pygame.Rect(14, back_y, 140, 38)
         self._btn_rects["btn_song_back"] = back_rect
-        hover_b = back_rect.collidepoint(mouse_pos)
-        pygame.draw.rect(self._display, (70, 55, 110) if hover_b else (50, 40, 80),
-                         back_rect, border_radius=10)
-        pygame.draw.rect(self._display, (160, 140, 200), back_rect, 2, border_radius=10)
-        back_s = self._fonts["body"].render("← 뒤로", True, (220, 220, 240))
+        hover_b   = back_rect.collidepoint(mouse_pos)
+        focused_b = (self._song_focus_idx == len(songs) + 1)  # start 다음 = back
+
+        bb_surf = pygame.Surface((140, 38), pygame.SRCALPHA)
+        bb_surf.fill((40, 25, 70, 200 if (hover_b or focused_b) else 140))
+        self._display.blit(bb_surf, back_rect.topleft)
+        self._draw_neon_rect(self._display, back_rect,
+                             self._neon_color((160, 140, 220), tick) if (hover_b or focused_b) else (80, 65, 120),
+                             width=2, radius=10, glow_radius=6 if (hover_b or focused_b) else 2)
+        back_s = self._fonts["body"].render("< BACK", True,
+                                             (220, 215, 240) if (hover_b or focused_b) else (160, 155, 185))
         self._display.blit(back_s, back_s.get_rect(center=back_rect.center))
 
-        # 조작 안내
+        # ── 푸터 ─────────────────────────────────────────────────
         hint = self._fonts["small"].render(
-            "터치/클릭으로 곡 선택  |  ESC: 뒤로", True, (90, 90, 120)
-        )
+            "UP/DOWN: MOVE   ENTER: START   ESC: BACK", True, (130, 110, 170))
         self._display.blit(hint, hint.get_rect(center=(w // 2, h - 14)))
 
     def _render_ready(self, w, h):
@@ -1023,7 +1402,7 @@ class GameEngine:
         pygame.draw.rect(self._display, (18, 14, 45), pygame.Rect(0, 0, w, HEADER_H))
         song_title = (self._current_song or {}).get("title", "")
         hdr = self._fonts["body"].render(
-            f"{'  ' + song_title + '  —  ' if song_title else ''}포즈를 준비해주세요",
+            f"{'  ' + song_title + '  --  ' if song_title else ''}GET READY!",
             True, (180, 180, 255))
         self._display.blit(hdr, hdr.get_rect(center=(w // 2, HEADER_H // 2)))
 
@@ -1032,7 +1411,7 @@ class GameEngine:
         # ── 왼쪽: 웹캠 피드 ──────────────────────────────────
         pygame.draw.rect(self._display, (12, 10, 30),
                          pygame.Rect(0, HEADER_H, MID_X, body_h))
-        lbl_cam = self._fonts["small"].render("내 화면", True, (100, 160, 255))
+        lbl_cam = self._fonts["small"].render("MY CAM", True, (100, 160, 255))
         self._display.blit(lbl_cam, (12, HEADER_H + 8))
 
         if self._ready_current_frame is not None:
@@ -1049,13 +1428,13 @@ class GameEngine:
                              border_radius=6)
             self._display.blit(cam_surf, (cam_x, cam_y))
         else:
-            no_cam = self._fonts["body"].render("카메라 없음", True, (80, 80, 110))
+            no_cam = self._fonts["body"].render("NO CAMERA", True, (80, 80, 110))
             self._display.blit(no_cam, no_cam.get_rect(center=(MID_X // 2, HEADER_H + body_h // 2)))
 
         # ── 오른쪽: 스켈레톤 ─────────────────────────────────
         pygame.draw.rect(self._display, (10, 8, 28),
                          pygame.Rect(MID_X, HEADER_H, w - MID_X, body_h))
-        lbl_sk = self._fonts["small"].render("내 스켈레톤", True, (255, 160, 80))
+        lbl_sk = self._fonts["small"].render("MY POSE", True, (255, 160, 80))
         self._display.blit(lbl_sk, (MID_X + 12, HEADER_H + 8))
 
         # 전신 감지 여부 판단
@@ -1077,7 +1456,7 @@ class GameEngine:
                 joint_radius=6,
             )
         else:
-            no_pose = self._fonts["body"].render("포즈 감지 중...", True, (80, 80, 120))
+            no_pose = self._fonts["body"].render("DETECTING...", True, (80, 80, 120))
             self._display.blit(no_pose,
                                no_pose.get_rect(center=(MID_X + (w - MID_X) // 2,
                                                         HEADER_H + body_h // 2)))
@@ -1093,14 +1472,14 @@ class GameEngine:
         is_counting = full_body_start > 0.0
 
         if not self._ready_pose_detected:
-            msg = "카메라 앞에 서 주세요!"
+            msg = "STAND IN FRONT OF CAMERA!"
             msg_color = (200, 150, 80)
         elif not full_body_detected:
-            msg = "몸 전체가 보일 때까지 뒤로 가주세요!"
+            msg = "STEP BACK UNTIL FULL BODY IS VISIBLE!"
             msg_color = (255, 160, 60)
         elif is_counting:
             remaining = max(0.0, ok_progress)
-            msg = f"게임 시작까지  {remaining:.1f}초..."
+            msg = f"STARTING IN  {remaining:.1f}s..."
             msg_color = (0, 240, 150)
             # 진행 바 (3초 → 0초, 채워지는 방향)
             pct = 1.0 - remaining / COUNTDOWN_SEC
@@ -1110,7 +1489,7 @@ class GameEngine:
             pygame.draw.rect(self._display, (0, 240, 150),
                              pygame.Rect(20, fy + FOOTER_H - 8, bar_w, 5), border_radius=3)
         else:
-            msg = "전신이 보이면 3초 후 자동으로 시작합니다!"
+            msg = "FULL BODY DETECTED -- AUTO START IN 3s!"
             msg_color = (100, 220, 255)
 
         msg_surf = self._fonts["body"].render(msg, True, msg_color)
@@ -1123,7 +1502,7 @@ class GameEngine:
         pygame.draw.rect(self._display, (100, 35, 35) if hover else (70, 25, 25),
                          cancel_rect, border_radius=10)
         pygame.draw.rect(self._display, (200, 100, 100), cancel_rect, 2, border_radius=10)
-        cancel_lbl = self._fonts["small"].render("취소", True, (255, 200, 200))
+        cancel_lbl = self._fonts["small"].render("CANCEL", True, (255, 200, 200))
         self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
 
     def _render_countdown(self, w, h):
@@ -1137,7 +1516,7 @@ class GameEngine:
         txt_surface = self._fonts["countdown"].render(str(count + 1), True, (0, 255, 255))
         self._display.blit(txt_surface, txt_surface.get_rect(center=(w // 2, h // 2)))
 
-        sub = self._fonts["body"].render("준비하세요!", True, (180, 180, 220))
+        sub = self._fonts["body"].render("GET READY!", True, (180, 180, 220))
         self._display.blit(sub, sub.get_rect(center=(w // 2, h // 2 + 100)))
 
         # 취소 버튼 (터치로 메뉴로 복귀)
@@ -1147,8 +1526,53 @@ class GameEngine:
         pygame.draw.rect(self._display, (120, 40, 40) if hover else (80, 30, 30),
                          cancel_rect, border_radius=12)
         pygame.draw.rect(self._display, (200, 100, 100), cancel_rect, 2, border_radius=12)
-        lbl = self._fonts["body"].render("취소", True, (255, 200, 200))
+        lbl = self._fonts["body"].render("CANCEL", True, (255, 200, 200))
         self._display.blit(lbl, lbl.get_rect(center=cancel_rect.center))
+
+    # ──────────────────────────────────────────────────────────
+    #  공통 UI 헬퍼
+    # ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _neon_color(base_color: tuple, tick: float, intensity: float = 1.0) -> tuple:
+        """시간에 따라 살짝 맥동하는 네온 색상을 반환합니다."""
+        import math
+        pulse = 0.75 + 0.25 * math.sin(tick * 3.5)
+        pulse *= intensity
+        return tuple(min(255, int(c * pulse)) for c in base_color)
+
+    @staticmethod
+    def _draw_neon_rect(surface, rect, color, width=2, radius=14, glow_radius=8):
+        """네온 글로우 효과가 있는 둥근 사각형을 그립니다."""
+        import pygame
+        # 글로우 레이어 (바깥쪽부터 안쪽으로 점점 밝게)
+        for i in range(glow_radius, 0, -1):
+            alpha = int(80 * (1 - i / glow_radius))
+            glow_surf = pygame.Surface((rect.width + i * 2, rect.height + i * 2),
+                                       pygame.SRCALPHA)
+            glow_color = (*color, alpha)
+            pygame.draw.rect(glow_surf, glow_color,
+                             pygame.Rect(0, 0, rect.width + i * 2, rect.height + i * 2),
+                             border_radius=radius + i)
+            surface.blit(glow_surf, (rect.x - i, rect.y - i))
+        # 실제 테두리
+        pygame.draw.rect(surface, color, rect, width, border_radius=radius)
+
+    @staticmethod
+    def _draw_corner_brackets(surface, rect, color, size=14, width=3):
+        """선택된 항목의 네 모서리에 대괄호 형태의 하이라이트를 그립니다."""
+        import pygame
+        x, y, w, h = rect.x, rect.y, rect.width, rect.height
+        corners = [
+            # (시작점, 수평 끝, 수직 끝)
+            ((x, y),         (x + size, y),       (x, y + size)),
+            ((x + w, y),     (x + w - size, y),   (x + w, y + size)),
+            ((x, y + h),     (x + size, y + h),   (x, y + h - size)),
+            ((x + w, y + h), (x + w - size, y + h), (x + w, y + h - size)),
+        ]
+        for origin, h_end, v_end in corners:
+            pygame.draw.line(surface, color, origin, h_end, width)
+            pygame.draw.line(surface, color, origin, v_end, width)
 
     def _draw_stick_figure(self, surface, landmarks_33x4, panel_rect,
                            line_color=(0, 200, 255), joint_color=(255, 255, 255),
@@ -1224,225 +1648,152 @@ class GameEngine:
                 pygame.draw.circle(surface, (255, 255, 255), (cx, cy), max(joint_radius - 3, 2))
 
     def _render_gameplay(self, w, h):
-        """Render gameplay screen — dual character layout.
+        """Render gameplay screen — dual panel layout.
 
-        Layout:
-          ┌──────────────────────┬──────────────────────────────┐
-          │   [헤더: 점수/콤보/버튼]                             │  50px
-          ├──────────────────────┼──────────────────────────────┤
-          │  내 캐릭터(스틱피겨)  │  가이드 캐릭터(참조 스틱피겨) │
-          │  + 카메라 피드(작게)  │  + 피드백 이펙트 오버레이    │
-          └──────────────────────┴──────────────────────────────┘
-          [푸터: 조작 안내]                                       30px
+        LEFT  : 웹캠 전체 화면 + 스켈레톤 오버레이  (파란 네온 테두리)
+        RIGHT : 레퍼런스 영상 (또는 스틱피겨)        (노란/오렌지 네온 테두리)
+        HEADER: 점수/콤보/시간/버튼
+        FOOTER: 곡 정보/조작 안내
         """
         import pygame
         import cv2
         import numpy as np
+        import math
 
         HEADER_H = 55
         FOOTER_H = 30
-        MID_X = w // 2
-        BODY_Y = HEADER_H
-        BODY_H = h - HEADER_H - FOOTER_H
+        BORDER   = 4          # 패널 테두리 두께
+        MID_X    = w // 2
+        BODY_Y   = HEADER_H
+        BODY_H   = h - HEADER_H - FOOTER_H
+        tick     = self._neon_tick
 
         # ── 배경 ──────────────────────────────────────────────────
-        self._display.fill((8, 6, 22))
+        self._display.fill((6, 4, 18))
 
-        # 좌/우 패널 구분선
-        pygame.draw.line(self._display, (50, 45, 90),
-                         (MID_X, BODY_Y), (MID_X, BODY_Y + BODY_H), 2)
-
-        # ── 패널 영역 정의 ─────────────────────────────────────────
-        left_panel  = (0,     BODY_Y, MID_X,     BODY_H)   # (x, y, w, h)
-        right_panel = (MID_X, BODY_Y, w - MID_X, BODY_H)
+        # ── 패널 영역 ──────────────────────────────────────────────
+        left_rect  = pygame.Rect(0,     BODY_Y, MID_X,     BODY_H)
+        right_rect = pygame.Rect(MID_X, BODY_Y, w - MID_X, BODY_H)
 
         # ══════════════════════════════════════════════════════
-        #  LEFT — 내 캐릭터 + 카메라 피드
+        #  LEFT — 웹캠 + 스켈레톤 오버레이 (전체 패널 크기)
         # ══════════════════════════════════════════════════════
+        pygame.draw.rect(self._display, (8, 8, 22), left_rect)
 
-        # 좌 패널 배경
-        pygame.draw.rect(self._display, (12, 10, 30),
-                         pygame.Rect(left_panel[0], left_panel[1],
-                                     left_panel[2], left_panel[3]))
-
-        # 패널 레이블
-        lbl_me = self._fonts["small"].render("나", True, (100, 160, 255))
-        self._display.blit(lbl_me, (left_panel[0] + 12, left_panel[1] + 8))
-
-        # 카메라 피드 크기 (좌 하단, 작게)
-        CAM_W = min(200, MID_X - 20)
-        CAM_H = int(CAM_W * 3 / 4)  # 4:3 비율
-        cam_x = left_panel[0] + 10
-        cam_y = BODY_Y + BODY_H - CAM_H - 10
-
-        # 스틱 피겨 영역: 패널 전체에서 카메라 높이 제외
-        fig_area_h = BODY_H - CAM_H - 20
-        left_fig_rect = (left_panel[0], BODY_Y, left_panel[2], fig_area_h)
-
-        if hasattr(self, '_pose_detected') and self._pose_detected and \
-                self._current_landmarks is not None:
-            # 스틱 피겨로 그리기 (실루엣보다 훨씬 가벼움)
-            self._draw_stick_figure(
-                self._display,
-                self._current_landmarks,
-                left_fig_rect,
-                line_color=(80, 220, 255),
-                joint_color=(200, 250, 255),
-                line_width=4,
-                joint_radius=6,
-            )
-        else:
-            # 포즈 미감지 안내
-            no_pose = self._fonts["body"].render("포즈 감지 중...", True, (80, 80, 120))
-            fp_rect = pygame.Rect(*left_fig_rect)
-            self._display.blit(no_pose, no_pose.get_rect(center=fp_rect.center))
-
-        # 카메라 피드 (작게, 좌 하단)
         if hasattr(self, '_current_frame') and self._current_frame is not None:
-            frame_small = cv2.resize(self._current_frame, (CAM_W, CAM_H),
-                                     interpolation=cv2.INTER_NEAREST)
+            cam_w_target = MID_X - BORDER * 2
+            cam_h_target = BODY_H - BORDER * 2
+            frame_bgr = cv2.resize(self._current_frame,
+                                   (cam_w_target, cam_h_target),
+                                   interpolation=cv2.INTER_NEAREST)
 
-            # ── 카메라 피드 위에 스켈레톤 오버레이 그리기 ──
+            # 스켈레톤을 카메라 프레임 위에 직접 그리기
             if hasattr(self, '_pose_detected') and self._pose_detected and \
                     self._current_landmarks is not None:
                 from pose.landmark_utils import SKELETON_CONNECTIONS, DANCE_JOINTS
                 lm = self._current_landmarks
-                cam_h_orig, cam_w_orig = self._current_frame.shape[:2]
                 for src, dst in SKELETON_CONNECTIONS:
                     if src < len(lm) and dst < len(lm) and \
                        lm[src][3] > 0.3 and lm[dst][3] > 0.3:
-                        x1 = int(lm[src][0] * CAM_W)
-                        y1 = int(lm[src][1] * CAM_H)
-                        x2 = int(lm[dst][0] * CAM_W)
-                        y2 = int(lm[dst][1] * CAM_H)
-                        cv2.line(frame_small, (x1, y1), (x2, y2), (0, 255, 200), 2)
+                        x1 = int(lm[src][0] * cam_w_target)
+                        y1 = int(lm[src][1] * cam_h_target)
+                        x2 = int(lm[dst][0] * cam_w_target)
+                        y2 = int(lm[dst][1] * cam_h_target)
+                        cv2.line(frame_bgr, (x1, y1), (x2, y2), (0, 255, 180), 3)
                 for idx in DANCE_JOINTS:
                     if idx < len(lm) and lm[idx][3] > 0.3:
-                        cx = int(lm[idx][0] * CAM_W)
-                        cy = int(lm[idx][1] * CAM_H)
-                        cv2.circle(frame_small, (cx, cy), 3, (0, 255, 255), -1)
+                        cx_ = int(lm[idx][0] * cam_w_target)
+                        cy_ = int(lm[idx][1] * cam_h_target)
+                        cv2.circle(frame_bgr, (cx_, cy_), 5, (0, 255, 255), -1)
+                        cv2.circle(frame_bgr, (cx_, cy_), 8, (0, 200, 150), 2)
 
-            # BGR→RGB + Surface 변환 (frombuffer가 swapaxes보다 빠름)
-            frame_rgb = frame_small[:, :, ::-1]
-            cam_surf = pygame.image.frombuffer(
-                frame_rgb.tobytes(), (CAM_W, CAM_H), "RGB")
-            # 카메라 피드 테두리
-            pygame.draw.rect(self._display, (40, 40, 70),
-                             pygame.Rect(cam_x - 2, cam_y - 2, CAM_W + 4, CAM_H + 4),
-                             border_radius=6)
-            self._display.blit(cam_surf, (cam_x, cam_y))
-            # "카메라" 레이블
-            cam_lbl = self._fonts["small"].render("카메라", True, (80, 120, 180))
-            self._display.blit(cam_lbl, (cam_x + 4, cam_y - 20))
+            frame_rgb = frame_bgr[:, :, ::-1]
+            cam_surf  = pygame.image.frombuffer(
+                frame_rgb.tobytes(), (cam_w_target, cam_h_target), "RGB")
+            self._display.blit(cam_surf, (BORDER, BODY_Y + BORDER))
         else:
-            # 카메라 없음 플레이스홀더
-            pygame.draw.rect(self._display, (25, 25, 45),
-                             pygame.Rect(cam_x, cam_y, CAM_W, CAM_H),
-                             border_radius=6)
-            no_cam = self._fonts["small"].render("카메라 없음", True, (80, 80, 110))
-            self._display.blit(no_cam,
-                               no_cam.get_rect(center=(cam_x + CAM_W // 2, cam_y + CAM_H // 2)))
+            no_cam = self._fonts["body"].render("NO CAMERA", True, (80, 80, 110))
+            self._display.blit(no_cam, no_cam.get_rect(center=left_rect.center))
+
+        # 좌 패널 레이블은 나중에 테두리와 함께 그린다 (effects 위)
 
         # ══════════════════════════════════════════════════════
-        #  RIGHT — 가이드: 영상이 있으면 mp4만 재생, 없으면 실루엣
+        #  RIGHT — 레퍼런스 영상 / 스틱피겨
         # ══════════════════════════════════════════════════════
-
-        # 우 패널 배경
-        pygame.draw.rect(self._display, (10, 8, 28),
-                         pygame.Rect(right_panel[0], right_panel[1],
-                                     right_panel[2], right_panel[3]))
-
-        # 패널 레이블
-        lbl_guide = self._fonts["small"].render("가이드", True, (255, 160, 80))
-        self._display.blit(lbl_guide, (right_panel[0] + 12, right_panel[1] + 8))
+        pygame.draw.rect(self._display, (10, 6, 22), right_rect)
 
         has_video = self._ref_video_cap is not None
 
         if has_video and self._ref_video_surf is not None:
-            # ── 영상이 있는 곡: mp4를 패널에 직접 표시 (실루엣 렌더링 불필요) ──
             vx, vy = self._ref_video_pos
             self._display.blit(self._ref_video_surf, (vx, vy))
         elif not has_video and self._ref_frame_landmarks is not None:
-            # ── 영상이 없는 곡: 스틱 피겨 (실루엣보다 가벼움) ──
-            right_fig_rect = (right_panel[0], BODY_Y, right_panel[2], BODY_H)
+            right_fig_rect = (right_rect.x, BODY_Y, right_rect.width, BODY_H)
             self._draw_stick_figure(
                 self._display,
                 self._ref_frame_landmarks,
                 right_fig_rect,
-                line_color=(255, 170, 80),
-                joint_color=(255, 220, 140),
+                line_color=(255, 180, 60),
+                joint_color=(255, 230, 120),
                 line_width=4,
                 joint_radius=6,
             )
         else:
-            # 가이드 없음 안내
-            rp_rect = pygame.Rect(right_panel[0], BODY_Y, right_panel[2], BODY_H)
-            no_guide = self._fonts["body"].render("가이드 없음", True, (80, 70, 60))
-            self._display.blit(no_guide, no_guide.get_rect(center=rp_rect.center))
+            no_guide = self._fonts["body"].render("NO GUIDE", True, (80, 70, 60))
+            self._display.blit(no_guide, no_guide.get_rect(center=right_rect.center))
 
-        # ── 피드백 이펙트 (가이드 캐릭터 위에 오버레이) ─────────────
+        # 우 패널 레이블은 나중에 테두리와 함께 그린다 (effects 위)
+
+        # ── 파티클 업데이트 & 렌더링 ────────────────────────────────
+        self._update_and_draw_particles()
+
+        # ── 피드백 이펙트 오버레이 ──────────────────────────────────
         if self._last_feedback and self._feedback_timer > 0:
-            fb = self._last_feedback
-            alpha_ratio = min(self._feedback_timer / 0.4, 1.0)  # 마지막 0.4초에 페이드
-            color = fb.get("color", (255, 255, 255))
+            self._draw_feedback_effect(w, h, MID_X, BODY_Y, BODY_H)
 
-            # 피드백 텍스트 (가이드 패널 상단 중앙)
-            grade_surf = self._fonts["feedback"].render(fb["text"], True, color)
-            gx = right_panel[0] + right_panel[2] // 2 - grade_surf.get_width() // 2
-            gy = BODY_Y + int(BODY_H * 0.12)
+        # ── 패널 풀 테두리 + 레이블 (effects 위에 그려 항상 보임) ─────
+        left_border_col  = self._neon_color((60, 180, 255), tick, 0.9)
+        right_border_col = self._neon_color((255, 160, 40), tick, 0.9)
+        self._draw_neon_rect(self._display, left_rect,  left_border_col,  width=3, radius=0, glow_radius=6)
+        self._draw_neon_rect(self._display, right_rect, right_border_col, width=3, radius=0, glow_radius=6)
 
-            # 알파 페이드 적용
-            if alpha_ratio < 1.0:
-                grade_surf.set_alpha(int(255 * alpha_ratio))
-            self._display.blit(grade_surf, (gx, gy))
-
-            # 점수 표시 (피드백 아래)
-            pts = fb.get("points", 0)
-            if pts > 0:
-                pts_surf = self._fonts["menu"].render(f"+{pts}", True, (255, 240, 100))
-                if alpha_ratio < 1.0:
-                    pts_surf.set_alpha(int(255 * alpha_ratio))
-                px2 = right_panel[0] + right_panel[2] // 2 - pts_surf.get_width() // 2
-                py2 = gy + grade_surf.get_height() + 4
-                self._display.blit(pts_surf, (px2, py2))
-
-            # 콤보 표시 (Perfect/Great 이상일 때)
-            combo = fb.get("combo", 0)
-            if combo >= 2:
-                combo_surf = self._fonts["body"].render(f"{combo} COMBO!", True, (255, 220, 0))
-                if alpha_ratio < 1.0:
-                    combo_surf.set_alpha(int(200 * alpha_ratio))
-                cx2 = right_panel[0] + right_panel[2] // 2 - combo_surf.get_width() // 2
-                cy2 = gy - combo_surf.get_height() - 6
-                self._display.blit(combo_surf, (cx2, cy2))
+        lbl_me    = self._fonts["small_retro"].render("ME",    True, (120, 200, 255))
+        lbl_guide = self._fonts["small_retro"].render("GUIDE", True, (255, 180, 80))
+        self._display.blit(lbl_me,    (BORDER + 8,           BODY_Y + BORDER + 6))
+        self._display.blit(lbl_guide, (MID_X + BORDER + 8,  BODY_Y + BORDER + 6))
 
         # ══════════════════════════════════════════════════════
-        #  HEADER — 점수 / 콤보 / 버튼
+        #  HEADER
         # ══════════════════════════════════════════════════════
         header_bg = pygame.Rect(0, 0, w, HEADER_H)
-        pygame.draw.rect(self._display, (18, 14, 45), header_bg)
-        pygame.draw.line(self._display, (60, 50, 100), (0, HEADER_H), (w, HEADER_H), 1)
+        pygame.draw.rect(self._display, (12, 8, 30), header_bg)
+        # 헤더 하단 네온 라인
+        hdr_line_col = self._neon_color((80, 60, 160), tick, 0.5)
+        pygame.draw.line(self._display, hdr_line_col, (0, HEADER_H), (w, HEADER_H), 2)
 
+        # 점수 (레트로 폰트)
+        score_col = self._neon_color((0, 255, 200), tick)
         score_surf = self._fonts["score"].render(
-            f"{int(self._scorer.total_score)}", True, (0, 240, 200)
-        )
+            f"{int(self._scorer.total_score):06d}", True, score_col)
         self._display.blit(score_surf, score_surf.get_rect(midleft=(16, HEADER_H // 2)))
 
-        combo_surf = self._fonts["body"].render(
-            f"★ {self._scorer.combo} 콤보", True, (255, 220, 0)
-        )
-        self._display.blit(combo_surf, combo_surf.get_rect(center=(w // 2, HEADER_H // 2)))
+        # 콤보
+        combo_val = self._scorer.combo
+        if combo_val > 0:
+            combo_col = self._neon_color((255, 230, 0), tick)
+            combo_surf = self._fonts["score"].render(f"{combo_val}x COMBO", True, combo_col)
+            self._display.blit(combo_surf, combo_surf.get_rect(center=(w // 2, HEADER_H // 2)))
 
-        # 진행 시간
-        elapsed = self._current_session.elapsed_time if self._current_session else 0
+        # 남은 시간
+        elapsed  = self._current_session.elapsed_time if self._current_session else 0
         duration = (self._current_song or {}).get("duration", 60)
-        remain = max(0, duration - elapsed)
-        time_surf = self._fonts["body"].render(
-            f"{int(remain // 60):02d}:{int(remain % 60):02d}", True, (180, 180, 220)
-        )
+        remain   = max(0, duration - elapsed)
+        time_col = (220, 200, 255) if remain > 10 else self._neon_color((255, 80, 80), tick)
+        time_surf = self._fonts["score"].render(
+            f"{int(remain // 60):02d}:{int(remain % 60):02d}", True, time_col)
         self._display.blit(time_surf, time_surf.get_rect(midright=(w - 230, HEADER_H // 2)))
 
-        # 헤더 우측 버튼 (일시정지 / 메뉴)
+        # 헤더 버튼
         mouse_pos = pygame.mouse.get_pos()
         pause_rect = pygame.Rect(w - 220, 8, 90, 38)
         menu_rect  = pygame.Rect(w - 120, 8, 90, 38)
@@ -1450,34 +1801,166 @@ class GameEngine:
         self._btn_rects["btn_gameplay_menu"] = menu_rect
 
         for rect, label, base_c in [
-            (pause_rect, "일시정지", (55, 55, 130)),
-            (menu_rect,  "메뉴",    (100, 38, 38)),
+            (pause_rect, "PAUSE", (55, 55, 130)),
+            (menu_rect,  "MENU",  (100, 38, 38)),
         ]:
             hover = rect.collidepoint(mouse_pos)
             color = tuple(min(c + 40, 255) for c in base_c) if hover else base_c
             pygame.draw.rect(self._display, color, rect, border_radius=8)
             pygame.draw.rect(self._display, (160, 160, 210), rect, 1, border_radius=8)
-            lbl = self._fonts["small"].render(label, True, (240, 240, 240))
+            lbl = self._fonts["btn_retro"].render(label, True, (240, 240, 240))
             self._display.blit(lbl, lbl.get_rect(center=rect.center))
 
         # ══════════════════════════════════════════════════════
-        #  FOOTER — 곡 정보 / 조작 안내
+        #  FOOTER
         # ══════════════════════════════════════════════════════
         fy = h - FOOTER_H
         pygame.draw.line(self._display, (40, 35, 70), (0, fy), (w, fy), 1)
 
         song_title  = (self._current_song or {}).get("title", "데모")
-        mode_labels = {"practice": "연습", "challenge": "도전", "freestyle": "자유"}
+        mode_labels = {"practice": "PRACTICE", "challenge": "CHALLENGE", "freestyle": "FREE"}
         mode_label  = mode_labels.get(self._current_mode, "")
         footer_left = self._fonts["small"].render(
-            f"[{mode_label}]  {song_title}", True, (120, 160, 220)
-        )
+            f"[{mode_label}]  {song_title}", True, (120, 160, 220))
         self._display.blit(footer_left, (14, fy + 6))
 
-        footer_right = self._fonts["small"].render(
-            "P: 일시정지  |  ESC: 메뉴", True, (80, 80, 110)
-        )
-        self._display.blit(footer_right, footer_right.get_rect(midright=(w - 10, fy + FOOTER_H // 2)))
+        footer_right = self._fonts["small_retro"].render(
+            "P: PAUSE  |  ESC: MENU", True, (80, 80, 110))
+        self._display.blit(footer_right,
+                           footer_right.get_rect(midright=(w - 10, fy + FOOTER_H // 2)))
+
+    def _update_and_draw_particles(self):
+        """파티클 업데이트 + 화면 그리기."""
+        import pygame
+        import math
+
+        alive = []
+        for p in self._particles:
+            p['life'] -= 1
+            if p['life'] <= 0:
+                continue
+            p['x']  += p['vx']
+            p['y']  += p['vy']
+            p['vy'] += 0.35   # 중력
+            p['vx'] *= 0.97   # 공기 저항
+            ratio = p['life'] / p['max_life']
+            alpha = int(255 * ratio)
+            size  = max(1, int(p['size'] * ratio))
+            r, g, b = p['color']
+            surf = pygame.Surface((size * 2, size * 2), pygame.SRCALPHA)
+            pygame.draw.circle(surf, (r, g, b, alpha), (size, size), size)
+            self._display.blit(surf, (int(p['x']) - size, int(p['y']) - size))
+            alive.append(p)
+        self._particles = alive
+
+    def _spawn_particles(self, cx: int, cy: int, color: tuple, count: int = 30):
+        """피드백 위치에서 파티클 폭발 생성."""
+        import random, math
+        for _ in range(count):
+            angle = random.uniform(0, math.pi * 2)
+            speed = random.uniform(5.0, 16.0)   # 빠른 속도
+            life  = random.randint(10, 22)       # 짧은 수명 (빠르게 사라짐)
+            size  = random.randint(4, 10)
+            r = min(255, max(0, color[0] + random.randint(-40, 40)))
+            g = min(255, max(0, color[1] + random.randint(-40, 40)))
+            b = min(255, max(0, color[2] + random.randint(-40, 40)))
+            self._particles.append({
+                'x': cx, 'y': cy,
+                'vx': math.cos(angle) * speed,
+                'vy': math.sin(angle) * speed - 3.0,
+                'life': life, 'max_life': life,
+                'color': (r, g, b),
+                'size': size,
+            })
+
+    def _draw_feedback_effect(self, w, h, mid_x, body_y, body_h):
+        """피드백 등급 텍스트 + 네온 테두리 + 바운스 애니메이션.
+
+        _feedback_timer : 남은 표시 시간 (1.2→0, 매 프레임 리셋될 수 있음)
+        _feedback_age   : 등장 후 경과 시간 (0→..., 리셋 시 0으로 초기화)
+        """
+        import pygame
+
+        fb    = self._last_feedback
+        timer = self._feedback_timer   # 남은 시간 — alpha fade-out에 사용
+        age   = self._feedback_age     # 경과 시간 — 바운스 애니메이션에 사용
+
+        color = fb.get("color", (255, 255, 255))
+        text  = fb.get("text", "")
+        pts   = fb.get("points", 0)
+        combo = fb.get("combo", 0)
+
+        # ── alpha: 마지막 0.35초에만 fade-out, 평소엔 완전 불투명 ──
+        alpha = int(255 * min(timer / 0.35, 1.0))
+        alpha = max(0, min(255, alpha))
+
+        # ── scale: 등장 0.12초 동안 바운스 (age 기반) ──
+        if age < 0.12:
+            t     = age / 0.12
+            scale = 0.5 + t * 0.7        # 0.5 → 1.2
+        elif age < 0.18:
+            t     = (age - 0.12) / 0.06
+            scale = 1.2 - t * 0.2        # 1.2 → 1.0
+        else:
+            scale = 1.0
+
+        cx = w // 2
+        cy = body_y + int(body_h * 0.38)
+
+        # ── 피드백 텍스트 ──
+        base_surf = self._fonts["feedback"].render(text, True, color)
+        if scale != 1.0:
+            new_w = max(1, int(base_surf.get_width() * scale))
+            new_h = max(1, int(base_surf.get_height() * scale))
+            base_surf = pygame.transform.scale(base_surf, (new_w, new_h))
+        base_surf.set_alpha(alpha)
+
+        tw, th = base_surf.get_width(), base_surf.get_height()
+        tx, ty = cx - tw // 2, cy - th // 2
+
+        # 글로우
+        if alpha > 60:
+            gw = max(1, int(tw * 1.18))
+            gh = max(1, int(th * 1.18))
+            glow_base = self._fonts["feedback"].render(text, True,
+                tuple(min(255, c + 60) for c in color))
+            glow_surf = pygame.transform.scale(glow_base, (gw, gh))
+            glow_surf.set_alpha(int(alpha * 0.35))
+            self._display.blit(glow_surf, (cx - gw // 2, cy - gh // 2))
+
+        # 네온 테두리 박스
+        pad = 18
+        box_rect = pygame.Rect(tx - pad, ty - pad // 2, tw + pad * 2, th + pad)
+        if alpha > 60:
+            box_surf = pygame.Surface((box_rect.width, box_rect.height), pygame.SRCALPHA)
+            box_surf.fill((*tuple(c // 5 for c in color), int(alpha * 0.45)))
+            self._display.blit(box_surf, box_rect.topleft)
+            pygame.draw.rect(self._display, color,
+                             pygame.Rect(box_rect.x - 2, box_rect.y - 2,
+                                         box_rect.width + 4, box_rect.height + 4),
+                             3, border_radius=10)
+            pygame.draw.rect(self._display, tuple(min(255, c + 80) for c in color),
+                             box_rect, 1, border_radius=8)
+
+        self._display.blit(base_surf, (tx, ty))
+
+        # +점수
+        if pts > 0 and alpha > 30:
+            pts_surf = self._fonts["feedback"].render(f"+{pts}", True, (255, 240, 80))
+            pts_surf = pygame.transform.scale(pts_surf,
+                (max(1, int(pts_surf.get_width() * 0.6)),
+                 max(1, int(pts_surf.get_height() * 0.6))))
+            pts_surf.set_alpha(alpha)
+            self._display.blit(pts_surf,
+                pts_surf.get_rect(midtop=(cx, ty + th + pad // 2 + 4)))
+
+        # 콤보
+        if combo >= 3 and alpha > 30:
+            combo_col = self._neon_color((255, 200, 0), self._neon_tick)
+            combo_surf = self._fonts["score"].render(f"{combo}x COMBO!!", True, combo_col)
+            combo_surf.set_alpha(int(alpha * 0.9))
+            self._display.blit(combo_surf,
+                combo_surf.get_rect(midbottom=(cx, ty - pad // 2 - 4)))
 
     def _render_pause_overlay(self, w, h):
         """게임플레이 위에 반투명 일시정지 오버레이를 렌더링합니다."""
@@ -1489,33 +1972,48 @@ class GameEngine:
         self._display.blit(overlay, (0, 0))
 
         # 타이틀
-        pause_txt = self._fonts["title"].render("일시정지", True, (255, 255, 255))
+        pause_txt = self._fonts["menu"].render("PAUSED", True, (255, 255, 255))
         self._display.blit(pause_txt, pause_txt.get_rect(center=(w // 2, h // 2 - 80)))
 
         mouse_pos = pygame.mouse.get_pos()
 
         btn_defs = [
-            ("btn_pause",         "▶  계속하기",  (0, 160, 100)),
-            ("btn_gameplay_menu", "메뉴로 돌아가기", (140, 50, 50)),
+            ("btn_pause",         "RESUME",    (0, 160, 100)),
+            ("btn_gameplay_menu", "MAIN MENU", (140, 50, 50)),
         ]
         for i, (btn_name, label, color) in enumerate(btn_defs):
             rect = pygame.Rect(w // 2 - 160, h // 2 + i * 72, 320, 54)
             self._btn_rects[btn_name] = rect   # 오버레이 버튼으로 덮어쓰기
             hover = rect.collidepoint(mouse_pos)
-            draw_color = tuple(min(c + 50, 255) for c in color) if hover else color
+            focused = (getattr(self, '_generic_focus_idx', 0) == i)
+            draw_color = tuple(min(c + 50, 255) for c in color) if (hover or focused) else color
             pygame.draw.rect(self._display, draw_color, rect, border_radius=14)
-            pygame.draw.rect(self._display, (220, 220, 220), rect, 2, border_radius=14)
+            border_col = (255, 255, 100) if focused else (220, 220, 220)
+            border_w   = 3 if focused else 2
+            pygame.draw.rect(self._display, border_col, rect, border_w, border_radius=14)
             lbl = self._fonts["menu"].render(label, True, (255, 255, 255))
             self._display.blit(lbl, lbl.get_rect(center=rect.center))
 
-        hint = self._fonts["small"].render("P / Space: 계속  |  ESC: 메뉴", True, (160, 160, 180))
+        hint = self._fonts["small"].render("P / SPACE: RESUME  |  ESC: MENU", True, (160, 160, 180))
         self._display.blit(hint, hint.get_rect(center=(w // 2, h - 30)))
 
     def _render_result(self, w, h):
         """Render result screen."""
         import pygame
 
-        self._display.fill((15, 10, 40))
+        tick = self._neon_tick
+
+        # 배경 그라데이션
+        for y_i in range(h):
+            t = y_i / h
+            pygame.draw.line(self._display,
+                             (int(10 + 10*t), int(5 + 5*t), int(30 + 20*t)),
+                             (0, y_i), (w, y_i))
+        # 스캔라인 효과 (레트로)
+        for y_i in range(0, h, 4):
+            scan = pygame.Surface((w, 1), pygame.SRCALPHA)
+            scan.fill((0, 0, 0, 40))
+            self._display.blit(scan, (0, y_i))
 
         MARGIN_TOP = 30
         MARGIN_BOTTOM = 40
@@ -1523,24 +2021,34 @@ class GameEngine:
         BTN_H = 50
         BTN_W = min(200, (w - 60) // 2)
 
-        # 타이틀
-        title = self._fonts["title"].render("DANCE COMPLETE!", True, (255, 220, 50))
+        # 타이틀 (레트로 폰트 + 네온 글로우)
+        title_col = self._neon_color((255, 220, 50), tick)
+        title = self._fonts["result_big"].render("DANCE COMPLETE!", True, title_col)
+        # 글로우
+        glow = self._fonts["result_big"].render("DANCE COMPLETE!", True, (100, 80, 0))
+        for dx, dy in [(-3,0),(3,0),(0,-3),(0,3)]:
+            self._display.blit(glow, glow.get_rect(center=(w // 2 + dx, MARGIN_TOP + 30 + dy)))
         title_rect = title.get_rect(center=(w // 2, MARGIN_TOP + 30))
         self._display.blit(title, title_rect)
 
+        # 구분선 (네온)
+        line_col = self._neon_color((200, 100, 255), tick, 0.7)
+        pygame.draw.line(self._display, line_col,
+                         (w // 4, MARGIN_TOP + 54), (w * 3 // 4, MARGIN_TOP + 54), 1)
+
         # 하단 버튼/푸터 영역 계산
         btn_area_y = h - MARGIN_BOTTOM - FOOTER_H - BTN_H - 10
-        content_top = MARGIN_TOP + 80
+        content_top = MARGIN_TOP + 70
         content_bottom = btn_area_y - 20
 
         if self._result_data:
             data = self._result_data
             items = [
-                (f"총점: {data.get('total_score', 0)}",       (0, 255, 200)),
-                (f"최대 콤보: {data.get('max_combo', 0)}",    (255, 220, 0)),
-                (f"총 동작: {data.get('total_moves', 0)}",    (200, 200, 220)),
-                (f"평균: {data.get('average_score', 0):.1f}", (180, 180, 255)),
-                (f"등급: {data.get('final_grade', '-')}",     (255, 180, 0)),
+                (f"SCORE:     {data.get('total_score', 0)}",    (0, 255, 200)),
+                (f"MAX COMBO: {data.get('max_combo', 0)}",      (255, 220, 0)),
+                (f"MOVES:     {data.get('total_moves', 0)}",    (200, 200, 220)),
+                (f"AVG:       {data.get('average_score', 0):.1f}", (180, 180, 255)),
+                (f"GRADE:     {data.get('final_grade', '-')}",  (255, 180, 0)),
             ]
 
             hits = data.get("hit_counts", {})
@@ -1549,14 +2057,14 @@ class GameEngine:
 
             y = content_top
             for text, color in items:
-                surf = self._fonts["menu"].render(text, True, color)
+                surf = self._fonts["result_big"].render(text, True, color)
                 self._display.blit(surf, surf.get_rect(center=(w // 2, y)))
                 y += item_gap
 
             if hits:
                 y += 4
                 hit_text = "  |  ".join(f"{k}: {v}" for k, v in hits.items())
-                hit_surf = self._fonts["body"].render(hit_text, True, (160, 160, 180))
+                hit_surf = self._fonts["small_retro"].render(hit_text, True, (160, 160, 180))
                 self._display.blit(hit_surf, hit_surf.get_rect(center=(w // 2, y)))
 
         # 버튼: 다시하기 / 메뉴 (하단 고정, 중앙 정렬)
@@ -1566,21 +2074,24 @@ class GameEngine:
         btn_x = w // 2 - total_w // 2
 
         btn_defs = [
-            ("btn_retry",       "↻  다시하기", (0, 140, 90)),
-            ("btn_result_menu", "홈 화면",    (100, 40, 120)),
+            ("btn_retry",       "RETRY",  (0, 140, 90)),
+            ("btn_result_menu", "MENU",   (100, 40, 120)),
         ]
         for i, (btn_name, label, color) in enumerate(btn_defs):
             rect = pygame.Rect(btn_x + i * (BTN_W + btn_gap), btn_area_y, BTN_W, BTN_H)
             self._btn_rects[btn_name] = rect
             hover = rect.collidepoint(mouse_pos)
-            draw_color = tuple(min(c + 50, 255) for c in color) if hover else color
+            focused = (getattr(self, '_generic_focus_idx', 0) == i)
+            draw_color = tuple(min(c + 50, 255) for c in color) if (hover or focused) else color
             pygame.draw.rect(self._display, draw_color, rect, border_radius=14)
-            pygame.draw.rect(self._display, (220, 220, 220), rect, 2, border_radius=14)
-            lbl = self._fonts["body"].render(label, True, (255, 255, 255))
+            border_col = (255, 255, 100) if focused else (220, 220, 220)
+            border_w   = 3 if focused else 2
+            pygame.draw.rect(self._display, border_col, rect, border_w, border_radius=14)
+            lbl = self._fonts["btn_retro"].render(label, True, (255, 255, 255))
             self._display.blit(lbl, lbl.get_rect(center=rect.center))
 
-        hint = self._fonts["small"].render(
-            "Enter: 메뉴  |  ESC: 메뉴", True, (100, 100, 130)
+        hint = self._fonts["small_retro"].render(
+            "ENTER: MENU  |  ESC: MENU", True, (100, 100, 130)
         )
         self._display.blit(hint, hint.get_rect(center=(w // 2, h - MARGIN_BOTTOM // 2)))
 
@@ -1595,17 +2106,17 @@ class GameEngine:
         FOOTER_H = 24
         BTN_H = 50
 
-        title = self._fonts["title"].render("설정", True, (200, 200, 255))
+        title = self._fonts["menu"].render("SETTINGS", True, (200, 200, 255))
         self._display.blit(title, title.get_rect(center=(w // 2, MARGIN_TOP + 30)))
 
         settings_items = [
-            f"카메라 장치: {self.config.get('camera', {}).get('device_id', 0)}",
-            f"해상도: {self.config.get('camera', {}).get('width', 640)}"
+            f"CAMERA:    {self.config.get('camera', {}).get('device_id', 0)}",
+            f"RESOLUTION: {self.config.get('camera', {}).get('width', 640)}"
             f"x{self.config.get('camera', {}).get('height', 480)}",
-            f"UI 테마: {self.config.get('ui', {}).get('theme', 'neon')}",
-            f"전체화면: {'예' if self.config.get('ui', {}).get('fullscreen', False) else '아니오'}",
-            f"유사도 메트릭: {self.config.get('scoring', {}).get('similarity_metric', 'cosine')}",
-            f"목표 FPS: {self.TARGET_FPS}",
+            f"UI THEME:  {self.config.get('ui', {}).get('theme', 'neon')}",
+            f"FULLSCREEN: {'YES' if self.config.get('ui', {}).get('fullscreen', False) else 'NO'}",
+            f"METRIC:    {self.config.get('scoring', {}).get('similarity_metric', 'cosine')}",
+            f"TARGET FPS: {self.TARGET_FPS}",
         ]
 
         # 버튼 영역
@@ -1626,14 +2137,17 @@ class GameEngine:
         mouse_pos = pygame.mouse.get_pos()
         back_rect = pygame.Rect(w // 2 - 110, btn_y, 220, BTN_H)
         self._btn_rects["btn_back"] = back_rect
-        hover = back_rect.collidepoint(mouse_pos)
-        pygame.draw.rect(self._display, (70, 70, 150) if hover else (50, 50, 110),
+        hover   = back_rect.collidepoint(mouse_pos)
+        focused = (getattr(self, '_generic_focus_idx', 0) == 0)
+        pygame.draw.rect(self._display, (70, 70, 150) if (hover or focused) else (50, 50, 110),
                          back_rect, border_radius=14)
-        pygame.draw.rect(self._display, (180, 180, 230), back_rect, 2, border_radius=14)
-        lbl = self._fonts["body"].render("← 뒤로", True, (255, 255, 255))
+        border_col = (255, 255, 100) if focused else (180, 180, 230)
+        border_w   = 3 if focused else 2
+        pygame.draw.rect(self._display, border_col, back_rect, border_w, border_radius=14)
+        lbl = self._fonts["body"].render("< BACK", True, (255, 255, 255))
         self._display.blit(lbl, lbl.get_rect(center=back_rect.center))
 
-        hint = self._fonts["small"].render("ESC: 뒤로", True, (100, 100, 130))
+        hint = self._fonts["small"].render("ESC: BACK", True, (100, 100, 130))
         self._display.blit(hint, hint.get_rect(center=(w // 2, h - MARGIN_BOTTOM // 2)))
 
     def transition_to(self, new_state: str):
@@ -1645,8 +2159,18 @@ class GameEngine:
 
     def _on_state_enter(self, state: str):
         """Handle setup when entering a new state."""
-        if state == GameState.SONG_SELECT:
+        # 화면 전환 시 터치 포커스 항상 초기화
+        self._touch_focused_btn = ""
+        # generic 포커스 리셋 (PAUSED / RESULT / SETTINGS)
+        self._generic_focus_idx = 0
+        # 피드백 age 리셋
+        self._feedback_age = 0.0
+
+        if state == GameState.MENU:
+            self._menu_focus_idx = 0
+        elif state == GameState.SONG_SELECT:
             self._selected_song_idx = 0
+            self._song_focus_idx = 0
         elif state == GameState.READY:
             # 준비 화면 진입 시 상태 초기화
             self._ready_current_frame = None
@@ -1661,7 +2185,7 @@ class GameEngine:
                     self._current_song = songs[self._selected_song_idx]
         elif state == GameState.COUNTDOWN:
             self._countdown_start = time.time()
-            self._countdown_timer = 5  # 5초 카운트다운 (워밍업 시간 확보)
+            self._countdown_timer = 2  # 3초 카운트다운 (워밍업 시간 확보)
         elif state == GameState.PLAYING:
             # PAUSED→PLAYING 복귀인 경우에만 세션 유지
             resuming_from_pause = getattr(self, '_prev_state', None) == GameState.PAUSED
