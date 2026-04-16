@@ -41,6 +41,19 @@ class GameEngine:
         self._embedding_extractor = None
         self._embedding_comparator = None
         self._scratch_comparator = None
+        self._scratch_model_name = None
+        self._embedding_model_name = None
+        self._scratch_reference_cache_dir = "data/cache/reference_embeddings"
+        self._embedding_reference_cache_dir = "data/cache/reference_embeddings"
+        self._scratch_use_reference_cache = True
+        self._embedding_use_reference_cache = True
+        self._fallback_pose_comparator = None
+        self._pose_hold_frames = 6
+        self._last_valid_landmarks = None
+        self._last_valid_landmarks_age_frames = 10**9
+        self._score_hold_seconds = 0.3
+        self._model_warmup_direct_fallback = True
+        self._fallback_similarity_method = "angle"
         self._warned_scratch_no_ref = False
         self._scorer = None
         self._ui = None
@@ -105,6 +118,9 @@ class GameEngine:
         import cv2
 
         pygame.init()
+        # 기본 버퍼(4096)는 ~100ms의 레이턴시를 유발하여 영상이 소리에 비해 먼저 나오는 느낌을 줍니다.
+        # 지연을 최소화하기 위해 버퍼를 512로 줄여서 선제 초기화합니다.
+        pygame.mixer.pre_init(44100, -16, 2, 512)
         pygame.mixer.init()
         # 키보드 반복 입력: 200ms 후 첫 반복, 이후 80ms 간격
         pygame.key.set_repeat(200, 80)
@@ -118,23 +134,31 @@ class GameEngine:
         pygame.display.set_caption("Let's Dance!")
         self._clock = pygame.time.Clock()
 
-        # Camera
+        # Camera & Pose Detector (Async Thread)
         cam_cfg = self.config.get("camera", {})
-        self._camera = cv2.VideoCapture(cam_cfg.get("device_id", 0))
-        self._camera.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg.get("width", 640))
-        self._camera.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg.get("height", 480))
-
-        # Pose detector
-        from pose.detector import PoseDetector
         pose_cfg = self.config.get("pose", {})
         backend = self.config.get("pose_backend", "mediapipe")
-        self._pose_detector = PoseDetector(
+
+        from pose.detector import PoseDetector
+        pose_detector = PoseDetector(
             backend=backend,
             model_complexity=pose_cfg.get("model_complexity", 1),
             min_detection_confidence=pose_cfg.get("min_detection_confidence", 0.5),
             min_tracking_confidence=pose_cfg.get("min_tracking_confidence", 0.5),
         )
-        self._pose_detector.initialize()
+        pose_detector.initialize()
+
+        from utils.async_camera import AsyncCameraPose
+        self._async_camera = AsyncCameraPose(
+            camera_idx=cam_cfg.get("device_id", 0),
+            width=cam_cfg.get("width", 640),
+            height=cam_cfg.get("height", 480),
+            pose_detector=pose_detector,
+        )
+        self._async_camera.start()
+
+        self._camera = None  # Deprecated
+        self._pose_detector = None  # Deprecated
 
         # Scorer & Feedback
         from scoring.scorer import DanceScorer
@@ -145,11 +169,20 @@ class GameEngine:
         )
         self._feedback_gen = FeedbackGenerator()
 
+        smoothing_cfg = self.config.get("runtime_smoothing", {})
+        self._pose_hold_frames = int(smoothing_cfg.get("pose_hold_frames", 6))
+        self._score_hold_seconds = float(smoothing_cfg.get("score_hold_seconds", 0.3))
+        self._model_warmup_direct_fallback = bool(
+            smoothing_cfg.get("model_warmup_direct_fallback", True))
+        self._fallback_similarity_method = smoothing_cfg.get(
+            "fallback_similarity", self.config.get("similarity_method", "angle"))
+
         # Pose similarity comparator
+        from direct_compare.pose_similarity import PoseSimilarity
         self._score_method = self.config.get("score_method", "direct")
         if self._score_method == "direct":
-            from direct_compare.pose_similarity import PoseSimilarity
             self._pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)
+            self._fallback_pose_comparator = self._pose_comparator
             self._similarity_method = self.config.get("similarity_method", "cosine")
             self._tolerance_delay = self.config.get("tolerance_delay", 1.0)
             self._embedding_extractor = None
@@ -162,6 +195,10 @@ class GameEngine:
             scratch_cfg = self.config.get("scratch", {})
             model_dir = scratch_cfg.get("model_dir", "data/models/scratch")
             model_name = scratch_cfg.get("model_name", "gcn_e64")
+            self._scratch_model_name = model_name
+            self._scratch_use_reference_cache = scratch_cfg.get("use_reference_cache", True)
+            self._scratch_reference_cache_dir = scratch_cfg.get(
+                "reference_cache_dir", "data/cache/reference_embeddings")
             model_path = resolve_scratch_model_path(
                 model_name=model_name,
                 model_dir=model_dir,
@@ -176,6 +213,7 @@ class GameEngine:
                 candidate_stride=scratch_cfg.get("candidate_stride", 3),
             )
             self._pose_comparator = None
+            self._fallback_pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)
             self._embedding_extractor = None
             self._similarity_method = "scratch"
             self._tolerance_delay = self.config.get("tolerance_delay", 1.0)
@@ -189,6 +227,10 @@ class GameEngine:
             embedding_cfg = self.config.get("embedding", {})
             model_dir = embedding_cfg.get("model_dir", "data/models/embedding")
             model_name = embedding_cfg.get("model_name", "dance_embedding")
+            self._embedding_model_name = model_name
+            self._embedding_use_reference_cache = embedding_cfg.get("use_reference_cache", True)
+            self._embedding_reference_cache_dir = embedding_cfg.get(
+                "reference_cache_dir", "data/cache/reference_embeddings")
             model_path = resolve_scratch_model_path(
                 model_name=model_name,
                 model_dir=model_dir,
@@ -203,6 +245,7 @@ class GameEngine:
                 candidate_stride=embedding_cfg.get("candidate_stride", 3),
             )
             self._pose_comparator = None
+            self._fallback_pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)
             self._embedding_extractor = None
             self._similarity_method = "embedding"
             self._tolerance_delay = self.config.get("tolerance_delay", 1.0)
@@ -824,14 +867,11 @@ class GameEngine:
             else:
                 self._countdown_timer = remaining
 
-            # 카운트다운 중 카메라+포즈 워밍업 (렉 방지)
-            import cv2
-            if self._camera is not None:
-                ret, frame = self._camera.read()
+            # 카운트다운 중 카메라 프레임 워밍업
+            if getattr(self, '_async_camera', None) is not None:
+                ret, frame, _, _ = self._async_camera.read()
                 if ret:
-                    frame = cv2.flip(frame, 1)
                     self._current_frame = frame
-                    self._pose_detector.detect(frame)  # 모델 워밍업
 
         elif self.state == GameState.PLAYING:
             self._update_gameplay()
@@ -839,22 +879,15 @@ class GameEngine:
         # PAUSED 상태에서는 카메라/포즈 업데이트 중단
 
     def _update_ready(self):
-        """READY 상태: 웹캠 + 포즈 감지. 발목까지 감지되면 3초 카운트다운 후 시작."""
-        import cv2
+        """READY 상태: 비동기 카메라로부터 포즈 감지 및 카운트다운."""
+        if getattr(self, '_async_camera', None) is not None:
+            ret, frame, lm, detected = self._async_camera.read()
+            if not ret:
+                return
 
-        if self._camera is None:
-            return
-
-        ret, frame = self._camera.read()
-        if not ret:
-            return
-
-        frame = cv2.flip(frame, 1)
-        self._ready_current_frame = frame
-
-        result = self._pose_detector.detect(frame)
-        self._ready_landmarks = result["landmarks"]
-        self._ready_pose_detected = result["detected"]
+            self._ready_current_frame = frame
+            self._ready_landmarks = lm
+            self._ready_pose_detected = detected
 
         # 전신(발목) 감지 여부 확인
         full_body = False
@@ -880,26 +913,86 @@ class GameEngine:
             self._ready_full_body_start = 0.0
             self._ready_countdown = 0.0
 
+    def _mark_no_score_frame(self):
+        """Keep the latest feedback visible briefly when no new score is produced."""
+        if self._last_feedback is not None and self._feedback_timer <= 0 and self._score_hold_seconds > 0:
+            self._feedback_timer = self._score_hold_seconds
+
+    def _pose_similarity_with_method(self, comparator, user_landmarks, ref_landmarks, method):
+        if method == "euclidean":
+            return comparator.euclidean_similarity(user_landmarks, ref_landmarks)
+        if method == "hybrid":
+            return comparator.hybrid_similarity(user_landmarks, ref_landmarks)
+        if method == "angle":
+            return comparator.angle_similarity(user_landmarks, ref_landmarks)
+        return comparator.cosine_similarity(user_landmarks, ref_landmarks)
+
+    def _direct_window_similarity(self, user_landmarks, method=None, debug=False):
+        """Direct pose similarity over the delay tolerance window."""
+        comparator = self._pose_comparator or self._fallback_pose_comparator
+        if comparator is None or user_landmarks is None or self._ref_landmarks is None:
+            return None
+        if self._ref_frame_landmarks is None:
+            return None
+
+        method = method or self._similarity_method
+        tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
+        start_idx = max(0, self._ref_current_idx - tolerance_frames)
+        end_idx = self._ref_current_idx + 1
+
+        best_sims = []
+        for ri in range(start_idx, end_idx):
+            ref_lm = self._ref_landmarks[ri]
+            best_sims.append(
+                self._pose_similarity_with_method(comparator, user_landmarks, ref_lm, method)
+            )
+        if not best_sims:
+            return None
+
+        best_sims.sort(reverse=True)
+        top_k = best_sims[:min(3, len(best_sims))]
+        sim = sum(top_k) / len(top_k)
+
+        if debug:
+            sim_now = self._pose_similarity_with_method(
+                comparator, user_landmarks, self._ref_frame_landmarks, method)
+            print(
+                f"\r[DBG] now={sim_now:.3f} top3={sim:.3f} "
+                f"max={best_sims[0]:.3f} win={end_idx-start_idx}f",
+                end="",
+            )
+        return sim
+
     def _update_gameplay(self):
-        """Capture frame, detect pose, compute score."""
+        """Fetch async frame and compute score."""
         import cv2
         import numpy as np
 
-        if self._camera is None:
+        if getattr(self, '_async_camera', None) is None:
             return
 
-        ret, frame = self._camera.read()
+        ret, frame, lm, detected = self._async_camera.read()
         if not ret:
             return
 
-        # 좌우반전 (거울 모드 — 사용자가 자연스럽게 보이도록)
-        frame = cv2.flip(frame, 1)
         self._current_frame = frame
+        self._current_landmarks = lm
+        self._pose_detected = detected
 
-        # Detect pose
-        result = self._pose_detector.detect(frame)
-        self._current_landmarks = result["landmarks"]
-        self._pose_detected = result["detected"]
+        scoring_landmarks = None
+        if self._pose_detected and self._current_landmarks is not None:
+            scoring_landmarks = self._current_landmarks
+            self._last_valid_landmarks = np.asarray(self._current_landmarks, dtype=np.float32).copy()
+            self._last_valid_landmarks_age_frames = 0
+        elif (
+            self._last_valid_landmarks is not None
+            and self._last_valid_landmarks_age_frames < self._pose_hold_frames
+        ):
+            # 짧은 MediaPipe dropout은 마지막 정상 포즈로 채점해 UI 공백을 줄인다.
+            self._last_valid_landmarks_age_frames += 1
+            scoring_landmarks = self._last_valid_landmarks
+        else:
+            self._last_valid_landmarks_age_frames += 1
 
         # 참조 캐릭터 프레임 인덱싱 (30fps 기준)
         if self._ref_landmarks is not None and self._current_session:
@@ -912,21 +1005,34 @@ class GameEngine:
 
         # 레퍼런스 영상 프레임 동기화 (영상 fps 기준)
         if self._ref_video_cap is not None and self._current_session:
-            video_fi = int(self._current_session.elapsed_time * self._ref_video_fps)
+            # pygame.mixer의 실제 오디오 재생 위치를 사용하여 정확도 극대화
+            import pygame
+            elapsed_sys = self._current_session.elapsed_time
+            if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
+                pos_ms = pygame.mixer.music.get_pos()
+                if pos_ms >= 0:
+                    # 마이너스 지연(오프셋)을 주어 영상이 소리보다 살짝 늦게(느리게) 렌더링되게 보정
+                    # 오디오 하드웨어 버퍼와 OS 전달 시간의 차이를 보정하는 리듬 게임 필수 로직
+                    audio_latency = self.config.get("audio", {}).get("latency_offset", 0.040)
+                    elapsed_sys = (pos_ms / 1000.0) - audio_latency
+                    if elapsed_sys < 0: elapsed_sys = 0.0
+
+            video_fi = int(elapsed_sys * self._ref_video_fps)
             total_video_frames = int(self._ref_video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
             if video_fi < total_video_frames:
                 current_pos = int(self._ref_video_cap.get(cv2.CAP_PROP_POS_FRAMES))
 
-                # 영상fps > 게임fps이면 불필요한 프레임은 grab()으로 건너뜀
+                # 오차(frames_to_skip)가 발생하면 동기화를 위해 스킵
                 frames_to_skip = video_fi - current_pos
                 if frames_to_skip < 0 or frames_to_skip > 10:
-                    # 너무 멀면 seek
+                    # 너무 멀면 seek (상당히 느림)
                     self._ref_video_cap.set(cv2.CAP_PROP_POS_FRAMES, video_fi)
-                    frames_to_skip = 0
-                elif frames_to_skip > 1:
-                    # 중간 프레임은 grab만 (디코딩 안 함 — retrieve보다 훨씬 빠름)
-                    for _ in range(frames_to_skip - 1):
+                else:
+                    # 목표 프레임(video_fi)의 바로 앞 컷까지 건너뜀 (grab이 빠름)
+                    while current_pos < video_fi:
                         self._ref_video_cap.grab()
+                        current_pos += 1
 
                 vret, vframe = self._ref_video_cap.read()
                 if vret:
@@ -946,84 +1052,54 @@ class GameEngine:
                 self._ref_video_frame = None
                 self._ref_video_surf = None
 
-        # Score based on pose similarity
-        if self._pose_detected:
+        # Score based on pose similarity. scoring_landmarks may be a held pose
+        # for a few frames when MediaPipe briefly drops detection.
+        sim = None
+        if scoring_landmarks is not None:
             if self._ref_frame_landmarks is not None:
                 if self._score_method == "direct":
-                    # direct: 반응 딜레이 윈도우 내 최대 유사도
-                    tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
-                    start_idx = max(0, self._ref_current_idx - tolerance_frames)
-                    end_idx = self._ref_current_idx + 1  # 현재 프레임 포함
-
-                    best_sims = []
-                    for ri in range(start_idx, end_idx):
-                        ref_lm = self._ref_landmarks[ri]
-                        if self._similarity_method == "euclidean":
-                            s = self._pose_comparator.euclidean_similarity(
-                                self._current_landmarks, ref_lm)
-                        elif self._similarity_method == "hybrid":
-                            s = self._pose_comparator.hybrid_similarity(
-                                self._current_landmarks, ref_lm)
-                        elif self._similarity_method == "angle":
-                            s = self._pose_comparator.angle_similarity(
-                                self._current_landmarks, ref_lm)
-                        else:
-                            s = self._pose_comparator.cosine_similarity(
-                                self._current_landmarks, ref_lm)
-                        best_sims.append(s)
-                    # 상위 3개 평균 (윈도우 내 순간 최대가 아닌 안정적 매칭)
-                    best_sims.sort(reverse=True)
-                    top_k = best_sims[:min(3, len(best_sims))]
-                    sim = sum(top_k) / len(top_k)
-
-                    # 디버그: 현재 프레임과만 비교한 값 vs 윈도우 최대값
-                    if self._similarity_method == "angle":
-                        sim_now = self._pose_comparator.angle_similarity(
-                            self._current_landmarks, self._ref_frame_landmarks)
-                    elif self._similarity_method == "euclidean":
-                        sim_now = self._pose_comparator.euclidean_similarity(
-                            self._current_landmarks, self._ref_frame_landmarks)
-                    elif self._similarity_method == "hybrid":
-                        sim_now = self._pose_comparator.hybrid_similarity(
-                            self._current_landmarks, self._ref_frame_landmarks)
-                    else:
-                        sim_now = self._pose_comparator.cosine_similarity(
-                            self._current_landmarks, self._ref_frame_landmarks)
-                    print(f"\r[DBG] now={sim_now:.3f} top3={sim:.3f} max={best_sims[0]:.3f} win={end_idx-start_idx}f", end="")
+                    sim = self._direct_window_similarity(
+                        scoring_landmarks,
+                        method=self._similarity_method,
+                        debug=True,
+                    )
                 elif self._score_method == "scratch":
-                    # scratch: compare recent user motion window with reference
-                    # motion windows through a scratch-trained TFLite encoder.
                     tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
                     sim = self._scratch_comparator.compute(
-                        self._current_landmarks,
+                        scoring_landmarks,
                         self._ref_landmarks,
                         self._ref_current_idx,
                         tolerance_frames=tolerance_frames,
                     )
-                    if sim is None:
-                        return
+                    if sim is None and self._model_warmup_direct_fallback:
+                        sim = self._direct_window_similarity(
+                            scoring_landmarks,
+                            method=self._fallback_similarity_method,
+                        )
                 else:
-                    # embedding: compare recent user motion window with
-                    # reference windows through a fine-tuned TFLite encoder.
                     tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
                     sim = self._embedding_comparator.compute(
-                        self._current_landmarks,
+                        scoring_landmarks,
                         self._ref_landmarks,
                         self._ref_current_idx,
                         tolerance_frames=tolerance_frames,
                     )
-                    if sim is None:
-                        return
+                    if sim is None and self._model_warmup_direct_fallback:
+                        sim = self._direct_window_similarity(
+                            scoring_landmarks,
+                            method=self._fallback_similarity_method,
+                        )
             else:
                 if self._score_method in ("scratch", "embedding"):
                     if not self._warned_scratch_no_ref:
                         print(f"[WARN] {self._score_method} scoring requires reference.npy; scoring paused.")
                         self._warned_scratch_no_ref = True
-                    return
-                # 레퍼런스 없으면 detection confidence로 대체
-                visibility = self._current_landmarks[:, 3]
-                mean_vis = float(np.mean(visibility[visibility > 0]))
-                sim = min(mean_vis, 1.0)
+                else:
+                    visibility = scoring_landmarks[:, 3]
+                    visible = visibility[visibility > 0]
+                    sim = min(float(np.mean(visible)), 1.0) if len(visible) else 0.0
+
+        if sim is not None:
             evaluation = self._scorer.evaluate(sim)
             fb = self._feedback_gen.generate(evaluation)
             if fb:
@@ -1039,6 +1115,7 @@ class GameEngine:
                     color = fb.get("color", (255, 255, 255))
                     self._spawn_particles(w_d // 2, h_d // 2, color, particle_count)
         else:
+            self._mark_no_score_frame()
             self._feedback_gen.update()
 
         # 피드백 타이머 감소
@@ -2361,9 +2438,11 @@ class GameEngine:
 
         if state == GameState.MENU:
             self._menu_focus_idx = 0
+            self._release_reference_assets()
         elif state == GameState.SONG_SELECT:
             self._selected_song_idx = 0
             self._song_focus_idx = 0
+            self._release_reference_assets()
         elif state == GameState.READY:
             # 준비 화면 진입 시 상태 초기화
             self._ready_current_frame = None
@@ -2376,6 +2455,9 @@ class GameEngine:
                 songs = self._songs_for_mode(self._current_mode)
                 if songs:
                     self._current_song = songs[self._selected_song_idx]
+            
+            # 여기서 리소스를 미리 로드하여 PLAYING 시작 시 렉(스파이크)을 완전히 제거
+            self._load_reference_assets()
         elif state == GameState.COUNTDOWN:
             self._countdown_start = time.time()
             self._countdown_timer = 2  # 3초 카운트다운 (워밍업 시간 확보)
@@ -2397,97 +2479,29 @@ class GameEngine:
                 self._feedback_timer = 0.0
                 self._current_frame = None
                 self._pose_detected = False
+                self._last_valid_landmarks = None
+                self._last_valid_landmarks_age_frames = 10**9
                 if self._scratch_comparator is not None:
                     self._scratch_comparator.reset()
                 if self._embedding_comparator is not None:
                     self._embedding_comparator.reset()
                 self._warned_scratch_no_ref = False
-                # 참조 랜드마크 로드
-                self._ref_landmarks = None
+                
+                self._load_reference_assets()
+                
+                # 재생 바를 0초로 돌리기
                 self._ref_frame_landmarks = None
-                # 레퍼런스 영상 초기화
-                if self._ref_video_cap is not None:
-                    self._ref_video_cap.release()
-                    self._ref_video_cap = None
                 self._ref_video_frame = None
-                self._ref_video_fps = 30.0
-
-                if self._current_song and self._current_song.get("has_reference"):
-                    import numpy as np
+                if getattr(self, '_ref_video_cap', None) is not None:
                     import cv2 as _cv2
-                    ref_path = os.path.join(self._current_song["path"], "reference.npy")
+                    self._ref_video_cap.set(_cv2.CAP_PROP_POS_FRAMES, 0)
+                    
+                if getattr(self, '_audio_path', None) and os.path.exists(self._audio_path):
                     try:
-                        ref_data = np.load(ref_path)
-                        # (N, 33, 3) → (N, 33, 4): visibility 채널 추가
-                        if ref_data.ndim == 3 and ref_data.shape[2] == 3:
-                            vis = np.ones((*ref_data.shape[:2], 1), dtype=np.float32)
-                            ref_data = np.concatenate([ref_data, vis], axis=2)
-                        self._ref_landmarks = ref_data.astype(np.float32)
-                        print(f"[INFO] 참조 랜드마크 로드: {self._ref_landmarks.shape}")
-                        
-                        # 백그라운드 프리워밍(Pre-computing Warm-up) 실행
-                        if getattr(self, '_scratch_comparator', None):
-                            self._scratch_comparator.warmup_reference_embeddings(self._ref_landmarks)
-                        elif getattr(self, '_embedding_comparator', None):
-                            self._embedding_comparator.warmup_reference_embeddings(self._ref_landmarks)
-                            
+                        import pygame
+                        pygame.mixer.music.play()
                     except Exception as e:
-                        print(f"[WARN] 참조 랜드마크 로드 실패: {e}")
-
-                    # 레퍼런스 mp4 영상 로드 (metadata에 video 경로가 있는 경우)
-                    video_rel = self._current_song.get("video", "")
-                    if video_rel:
-                        # 절대 경로 구성
-                        project_root = os.path.dirname(os.path.dirname(
-                            os.path.dirname(os.path.abspath(__file__))))
-                        video_path = os.path.join(project_root, video_rel)
-                        if not os.path.exists(video_path):
-                            video_path = os.path.join(os.getcwd(), video_rel)
-                        if os.path.exists(video_path):
-                            self._ref_video_cap = _cv2.VideoCapture(video_path)
-                            self._ref_video_fps = self._current_song.get(
-                                "video_fps",
-                                self._ref_video_cap.get(_cv2.CAP_PROP_FPS) or 30.0,
-                            )
-                            # 영상 리사이즈 크기 미리 계산 (렌더링에서 반복 안 함)
-                            ui_cfg = self.config.get("ui", {})
-                            disp_w = ui_cfg.get("window_width", 1024)
-                            disp_h = ui_cfg.get("window_height", 600)
-                            HEADER_H = 55
-                            FOOTER_H = 30
-                            rp_w = disp_w - disp_w // 2  # 우 패널 너비
-                            rp_h = disp_h - HEADER_H - FOOTER_H
-                            vid_w = int(self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
-                            vid_h = int(self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
-                            if vid_w > 0 and vid_h > 0:
-                                vscale = min(rp_w / vid_w, rp_h / vid_h)
-                                tw, th = int(vid_w * vscale), int(vid_h * vscale)
-                                self._ref_video_size = (tw, th)
-                                self._ref_video_pos = (
-                                    disp_w // 2 + (rp_w - tw) // 2,
-                                    HEADER_H + (rp_h - th) // 2,
-                                )
-                            print(f"[INFO] 레퍼런스 영상 로드: {video_path} "
-                                  f"({self._ref_video_fps:.1f}fps, "
-                                  f"resize→{self._ref_video_size})")
-
-                            # 오디오 추출 및 플레이 (pygame mixer는 mp3/ogg를 지원함)
-                            import subprocess
-                            import pygame
-                            audio_path = video_path.rsplit('.', 1)[0] + ".mp3"
-                            if not os.path.exists(audio_path):
-                                print(f"[INFO] 비디오에서 오디오 추출 중: {audio_path}")
-                                subprocess.run(["ffmpeg", "-y", "-i", video_path, "-q:a", "0", "-map", "a", audio_path], capture_output=True)
-                            
-                            if os.path.exists(audio_path):
-                                try:
-                                    pygame.mixer.music.load(audio_path)
-                                    pygame.mixer.music.play()
-                                except Exception as e:
-                                    print(f"[WARN] 오디오 재생 실패: {e}")
-
-                        else:
-                            print(f"[WARN] 레퍼런스 영상 없음: {video_path}")
+                        print(f"[WARN] 오디오 재생 실패: {e}")
                 from game.session import GameSession
                 # 선택된 곡 정보 사용 (없으면 기본값)
                 song = self._current_song or {}
@@ -2552,13 +2566,130 @@ class GameEngine:
         except Exception as e:
             print(f"[WARN] 리더보드 저장 실패: {e}")
 
+    def _release_reference_assets(self):
+        """이전 곡의 리소스를 해제합니다."""
+        self._ref_landmarks = None
+        self._ref_frame_landmarks = None
+        if getattr(self, '_ref_video_cap', None) is not None:
+            self._ref_video_cap.release()
+            self._ref_video_cap = None
+        self._ref_video_frame = None
+        self._audio_path = None
+
+    def _load_reference_assets(self):
+        """PLAYING 진입 시의 초기 렉을 없애기 위해 미리 무거운 리소스(영상, Numpy 배열 등)를 로드해둡니다."""
+        if getattr(self, '_ref_landmarks', None) is not None:
+            return  # 이미 로드됨
+            
+        import os
+        import subprocess
+        import pygame
+        import numpy as np
+        import cv2 as _cv2
+
+        self._ref_video_fps = 30.0
+
+        if self._current_song and self._current_song.get("has_reference"):
+            ref_path = os.path.join(self._current_song["path"], "reference.npy")
+            try:
+                ref_data = np.load(ref_path)
+                if ref_data.ndim == 3 and ref_data.shape[2] == 3:
+                    vis = np.ones((*ref_data.shape[:2], 1), dtype=np.float32)
+                    ref_data = np.concatenate([ref_data, vis], axis=2)
+                self._ref_landmarks = ref_data.astype(np.float32)
+                # Reference embedding cache가 있으면 디스크에서 로드하고,
+                # 없으면 기존처럼 백그라운드 TFLite warmup으로 fallback한다.
+                dance_name = os.path.basename(self._current_song["path"])
+                project_root = os.path.dirname(os.path.dirname(
+                    os.path.dirname(os.path.abspath(__file__))))
+                
+                if getattr(self, '_scratch_comparator', None):
+                    loaded = False
+                    if getattr(self, '_scratch_use_reference_cache', False):
+                        cache_dir = getattr(self, '_scratch_reference_cache_dir', "")
+                        if cache_dir and not os.path.isabs(cache_dir):
+                            cache_dir = os.path.join(project_root, cache_dir)
+                        if cache_dir:
+                            loaded = self._scratch_comparator.load_reference_embedding_cache(
+                                cache_dir=cache_dir,
+                                dance_name=dance_name,
+                                model_kind="scratch",
+                                model_name=getattr(self, '_scratch_model_name', ""),
+                                reference_path=ref_path,
+                            )
+                    if not loaded:
+                        self._scratch_comparator.warmup_reference_embeddings(self._ref_landmarks)
+                elif getattr(self, '_embedding_comparator', None):
+                    loaded = False
+                    if getattr(self, '_embedding_use_reference_cache', False):
+                        cache_dir = getattr(self, '_embedding_reference_cache_dir', "")
+                        if cache_dir and not os.path.isabs(cache_dir):
+                            cache_dir = os.path.join(project_root, cache_dir)
+                        if cache_dir:
+                            loaded = self._embedding_comparator.load_reference_embedding_cache(
+                                cache_dir=cache_dir,
+                                dance_name=dance_name,
+                                model_kind="embedding",
+                                model_name=getattr(self, '_embedding_model_name', ""),
+                                reference_path=ref_path,
+                            )
+                    if not loaded:
+                        self._embedding_comparator.warmup_reference_embeddings(self._ref_landmarks)
+            except Exception as e:
+                print(f"[WARN] 참조 랜드마크 로드 실패: {e}")
+
+            video_rel = self._current_song.get("video", "")
+            if video_rel:
+                project_root = os.path.dirname(os.path.dirname(
+                    os.path.dirname(os.path.abspath(__file__))))
+                video_path = os.path.join(project_root, video_rel)
+                if not os.path.exists(video_path):
+                    video_path = os.path.join(os.getcwd(), video_rel)
+                
+                if os.path.exists(video_path):
+                    self._ref_video_cap = _cv2.VideoCapture(video_path)
+                    self._ref_video_fps = self._current_song.get(
+                        "video_fps",
+                        self._ref_video_cap.get(_cv2.CAP_PROP_FPS) or 30.0,
+                    )
+                    
+                    # 영상 리사이즈 크기 미리 계산 
+                    ui_cfg = self.config.get("ui", {})
+                    disp_w = ui_cfg.get("window_width", 1024)
+                    disp_h = ui_cfg.get("window_height", 600)
+                    HEADER_H = 55
+                    FOOTER_H = 30
+                    rp_w = disp_w - disp_w // 2
+                    rp_h = disp_h - HEADER_H - FOOTER_H
+                    vid_w = int(self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
+                    vid_h = int(self._ref_video_cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
+                    if vid_w > 0 and vid_h > 0:
+                        vscale = min(rp_w / vid_w, rp_h / vid_h)
+                        tw, th = int(vid_w * vscale), int(vid_h * vscale)
+                        self._ref_video_size = (tw, th)
+                        self._ref_video_pos = (
+                            disp_w // 2 + (rp_w - tw) // 2,
+                            HEADER_H + (rp_h - th) // 2,
+                        )
+
+                    # 오디오 추출 및 프리로드 (Ogg Vorbis)
+                    self._audio_path = video_path.rsplit('.', 1)[0] + ".ogg"
+                    if not os.path.exists(self._audio_path):
+                        subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "libvorbis", "-q:a", "4", self._audio_path], capture_output=True)
+                    
+                    if os.path.exists(self._audio_path):
+                        try:
+                            pygame.mixer.music.load(self._audio_path)
+                        except Exception:
+                            pass
+                else:
+                    print(f"[WARN] 레퍼런스 영상 찾을 수 없음: {video_path}")
+
     def shutdown(self):
         """Clean up all resources."""
         self.running = False
-        if self._pose_detector:
-            self._pose_detector.release()
-        if self._camera:
-            self._camera.release()
+        if getattr(self, '_async_camera', None) is not None:
+            self._async_camera.stop()
         if self._ref_video_cap is not None:
             self._ref_video_cap.release()
             self._ref_video_cap = None
