@@ -532,6 +532,7 @@ class GameEngine:
             GameState.PAUSED:   ["btn_pause", "btn_gameplay_menu"],
             GameState.RESULT:   ["btn_retry", "btn_result_menu"],
             GameState.SETTINGS: ["btn_back"],
+            GameState.READY: ["btn_ready_skip", "btn_ready_cancel"],
         }
 
         # SONG_SELECT: 좌우로 패널 전환 (0=곡목록, 1=상세/버튼)
@@ -797,6 +798,8 @@ class GameEngine:
             self.transition_to(GameState.MENU)
         elif btn_name == "btn_countdown_cancel":
             self.transition_to(GameState.MENU)
+        elif btn_name == "btn_ready_skip":
+            self.transition_to(GameState.COUNTDOWN)
         elif btn_name == "btn_ready_cancel":
             self.transition_to(GameState.MENU)
         elif btn_name == "btn_ready_skip":
@@ -1561,27 +1564,31 @@ class GameEngine:
         msg_surf = self._fonts["body"].render(msg, True, msg_color)
         self._display.blit(msg_surf, msg_surf.get_rect(center=(w // 2, fy + FOOTER_H // 2 - 2)))
 
-        # ── 취소 / 스킵 버튼 ──────────────────────────────────────
-        cancel_rect = pygame.Rect(w - 230, HEADER_H + 6, 110, 36)
-        skip_rect   = pygame.Rect(w - 115, HEADER_H + 6, 105, 36)
+        # 스킵 버튼
+        skip_rect = pygame.Rect(w - 220, HEADER_H + 6, 100, 36)
+        self._btn_rects["btn_ready_skip"] = skip_rect
+        hover_s = skip_rect.collidepoint(pygame.mouse.get_pos())
+        focused_s = (getattr(self, '_generic_focus_idx', 0) == 0)
+        active_s = hover_s or focused_s
+        pygame.draw.rect(self._display, (35, 100, 60) if active_s else (25, 70, 40),
+                         skip_rect, border_radius=10)
+        pygame.draw.rect(self._display, (255, 255, 100) if focused_s else (100, 200, 150),
+                         skip_rect, 3 if focused_s else 2, border_radius=10)
+        skip_lbl = self._fonts["small"].render("SKIP", True, (255, 255, 255) if active_s else (200, 255, 220))
+        self._display.blit(skip_lbl, skip_lbl.get_rect(center=skip_rect.center))
+
+        # 취소 버튼
+        cancel_rect = pygame.Rect(w - 110, HEADER_H + 6, 100, 36)
         self._btn_rects["btn_ready_cancel"] = cancel_rect
-        self._btn_rects["btn_ready_skip"]   = skip_rect
-
-        mouse_pos = pygame.mouse.get_pos()
-        for rect, label, base_c, border_c in [
-            (cancel_rect, "CANCEL", (100, 35, 35), (200, 100, 100)),
-            (skip_rect,   "SKIP >",  (30, 80, 30),  (100, 220, 100)),
-        ]:
-            hover = rect.collidepoint(mouse_pos)
-            pygame.draw.rect(self._display,
-                             tuple(min(c + 30, 255) for c in base_c) if hover else base_c,
-                             rect, border_radius=10)
-            pygame.draw.rect(self._display, border_c, rect, 2, border_radius=10)
-            lbl = self._fonts["small"].render(label, True, (255, 220, 220) if label == "CANCEL" else (200, 255, 200))
-            self._display.blit(lbl, lbl.get_rect(center=rect.center))
-
-        skip_hint = self._fonts["small"].render("ENTER: SKIP", True, (100, 180, 100))
-        self._display.blit(skip_hint, skip_hint.get_rect(midright=(w - 6, HEADER_H + 6 + 36 + 14)))
+        hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
+        focused_c = (getattr(self, '_generic_focus_idx', 0) == 1)
+        active_c = hover or focused_c
+        pygame.draw.rect(self._display, (100, 35, 35) if active_c else (70, 25, 25),
+                         cancel_rect, border_radius=10)
+        pygame.draw.rect(self._display, (255, 255, 100) if focused_c else (200, 100, 100),
+                         cancel_rect, 3 if focused_c else 2, border_radius=10)
+        cancel_lbl = self._fonts["small"].render("CANCEL", True, (255, 255, 255) if active_c else (255, 200, 200))
+        self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
 
     def _render_countdown(self, w, h):
         """Render countdown screen."""
