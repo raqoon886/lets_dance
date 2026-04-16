@@ -14,12 +14,13 @@ class GameState:
     """Enumeration of game states."""
     MENU = "menu"
     SONG_SELECT = "song_select"
-    READY = "ready"          # 준비 화면 (포즈 감지 + OK 사인 대기)
+    READY = "ready"
     COUNTDOWN = "countdown"
     PLAYING = "playing"
     PAUSED = "paused"
     RESULT = "result"
     SETTINGS = "settings"
+    LEADERBOARD = "leaderboard"
 
 
 class GameEngine:
@@ -51,6 +52,8 @@ class GameEngine:
         self._countdown_timer = 0
         self._countdown_start = 0
         self._result_data = None
+        self._leaderboard: list = []        # [{song_id, title, score, grade, date}, ...]
+        self._leaderboard_filter: str = ""  # "" = 전체, else song_id
         # 터치/마우스 클릭용 버튼 rect 저장소
         self._btn_rects = {}
         # 곡 선택 관련
@@ -525,30 +528,26 @@ class GameEngine:
 
         # ── 화면별 포커스 버튼 목록 정의 ──────────────────────────────
         FOCUS_LISTS = {
-            GameState.MENU: [
-                "btn_practice", "btn_challenge", "btn_freestyle",
-                "btn_settings", "btn_quit",
-            ],
-            GameState.PAUSED:   ["btn_pause", "btn_gameplay_menu"],
-            GameState.RESULT:   ["btn_retry", "btn_result_menu"],
-            GameState.SETTINGS: ["btn_back"],
-            GameState.READY: ["btn_ready_skip", "btn_ready_cancel"],
+            GameState.MENU:       ["btn_practice", "btn_challenge", "btn_freestyle",
+                                   "btn_leaderboard", "btn_settings", "btn_quit"],
+            GameState.PAUSED:     ["btn_pause", "btn_gameplay_menu"],
+            GameState.RESULT:     ["btn_retry", "btn_result_songs", "btn_result_menu"],
+            GameState.SETTINGS:   ["btn_back"],
+            GameState.READY:      ["btn_ready_skip", "btn_ready_cancel"],
+            GameState.COUNTDOWN:  ["btn_countdown_cancel"],
+            GameState.PLAYING:    ["btn_pause", "btn_gameplay_menu"],
+            GameState.LEADERBOARD: ["btn_lb_back"],
         }
 
-        # SONG_SELECT: 좌우로 패널 전환 (0=곡목록, 1=상세/버튼)
-        # _song_panel: 0=곡목록 패널, 1=버튼 패널(START=0, BACK=1)
-        if not hasattr(self, '_song_panel'):
-            self._song_panel = 0
-        if not hasattr(self, '_song_btn_idx'):
-            self._song_btn_idx = 0   # 0=START, 1=BACK
+        # SONG_SELECT: 전체 버튼을 하나의 플랫 리스트로 관리
+        # [btn_song_0, ..., btn_song_N, btn_song_start, btn_song_back]
+        # ↑/↓로 전체를 선형 순환, →는 START 단축키, ←는 BACK 단축키
 
         def _get_focus_list():
             if self.state == GameState.SONG_SELECT:
                 songs = self._songs_for_mode(self._current_mode)
-                if self._song_panel == 0:
-                    return [f"btn_song_{i}" for i in range(len(songs))]
-                else:
-                    return ["btn_song_start", "btn_song_back"]
+                return [f"btn_song_{i}" for i in range(len(songs))] + \
+                       ["btn_song_start", "btn_song_back"]
             return FOCUS_LISTS.get(self.state, [])
 
         def _focus_count():
@@ -558,10 +557,7 @@ class GameEngine:
             if self.state == GameState.MENU:
                 return self._menu_focus_idx
             if self.state == GameState.SONG_SELECT:
-                if self._song_panel == 0:
-                    return self._song_focus_idx
-                else:
-                    return self._song_btn_idx
+                return self._song_focus_idx
             return getattr(self, '_generic_focus_idx', 0)
 
         def _set_focus_idx(idx):
@@ -572,11 +568,11 @@ class GameEngine:
             if self.state == GameState.MENU:
                 self._menu_focus_idx = idx
             elif self.state == GameState.SONG_SELECT:
-                if self._song_panel == 0:
-                    self._song_focus_idx = idx
+                self._song_focus_idx = idx
+                # 곡 카드 범위일 때만 selected_song_idx 갱신
+                songs = self._songs_for_mode(self._current_mode)
+                if idx < len(songs):
                     self._selected_song_idx = idx
-                else:
-                    self._song_btn_idx = idx
             else:
                 self._generic_focus_idx = idx
 
@@ -644,32 +640,29 @@ class GameEngine:
                     if cnt:
                         _set_focus_idx(_get_focus_idx() - 1)
 
-                # → : SONG_SELECT=상세패널로, 그 외=다음 항목
+                # → : SONG_SELECT=START 단축, 그 외=다음 항목
                 elif event.key == pygame.K_RIGHT:
                     if self.state == GameState.SONG_SELECT:
-                        self._song_panel = 1
-                        self._song_btn_idx = 0
+                        songs = self._songs_for_mode(self._current_mode)
+                        _set_focus_idx(len(songs))        # START 위치로 점프
                     else:
                         cnt = _focus_count()
                         if cnt:
                             _set_focus_idx(_get_focus_idx() + 1)
 
-                # ← : SONG_SELECT=곡목록으로, 그 외=이전 항목
+                # ← : SONG_SELECT=BACK 단축, 그 외=이전 항목
                 elif event.key == pygame.K_LEFT:
                     if self.state == GameState.SONG_SELECT:
-                        self._song_panel = 0
+                        songs = self._songs_for_mode(self._current_mode)
+                        _set_focus_idx(len(songs) + 1)    # BACK 위치로 점프
                     else:
                         cnt = _focus_count()
                         if cnt:
                             _set_focus_idx(_get_focus_idx() - 1)
 
-                # Enter / Space → 선택 확정
+                # Enter / Space → 선택 확정 (모든 화면 통일)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    if self.state == GameState.READY:
-                        # READY 화면에서 Enter = SKIP (전신 감지 대기 없이 바로 시작)
-                        self._on_button_press("btn_ready_skip")
-                    else:
-                        _press_focused()
+                    _press_focused()
 
                 # P → 게임 중 일시정지 토글
                 elif event.key == pygame.K_p:
@@ -758,6 +751,8 @@ class GameEngine:
             self.transition_to(GameState.SONG_SELECT)
         elif btn_name == "btn_settings":
             self.transition_to(GameState.SETTINGS)
+        elif btn_name == "btn_leaderboard":
+            self.transition_to(GameState.LEADERBOARD)
         elif btn_name == "btn_quit":
             self.running = False
 
@@ -790,7 +785,13 @@ class GameEngine:
         # ── 결과 화면 버튼 ──
         elif btn_name == "btn_retry":
             self.transition_to(GameState.READY)
+        elif btn_name == "btn_result_songs":
+            self.transition_to(GameState.SONG_SELECT)
         elif btn_name == "btn_result_menu":
+            self.transition_to(GameState.MENU)
+
+        # ── 리더보드 화면 버튼 ──
+        elif btn_name == "btn_lb_back":
             self.transition_to(GameState.MENU)
 
         # ── 설정/카운트다운/준비 화면 버튼 ──
@@ -802,9 +803,6 @@ class GameEngine:
             self.transition_to(GameState.COUNTDOWN)
         elif btn_name == "btn_ready_cancel":
             self.transition_to(GameState.MENU)
-        elif btn_name == "btn_ready_skip":
-            # 전신 감지 대기 없이 바로 카운트다운으로 진입
-            self.transition_to(GameState.COUNTDOWN)
 
     def _update(self):
         """Update game state based on current state."""
@@ -1081,6 +1079,8 @@ class GameEngine:
             self._render_result(w, h)
         elif self.state == GameState.SETTINGS:
             self._render_settings(w, h)
+        elif self.state == GameState.LEADERBOARD:
+            self._render_leaderboard(w, h)
 
         pygame.display.flip()
 
@@ -1120,8 +1120,8 @@ class GameEngine:
         bottom_area_h    = SMALL_BTN_H + FOOTER_H + 14
         mode_area_bottom = h - MARGIN_BOTTOM - bottom_area_h
         mode_area_h      = mode_area_bottom - mode_area_top
-        num_btns         = 3
-        gap              = max(14, (mode_area_h - num_btns * BTN_H) // (num_btns + 1))
+        num_btns         = 4
+        gap              = max(10, (mode_area_h - num_btns * BTN_H) // (num_btns + 1))
         btn_start_y      = mode_area_top + (mode_area_h - (num_btns * BTN_H + gap * (num_btns - 1))) // 2
         btn_x            = w // 2 - BTN_W // 2
 
@@ -1148,9 +1148,10 @@ class GameEngine:
         # ── 모드 버튼 ────────────────────────────────────────────
         mouse_pos = pygame.mouse.get_pos()
         btn_defs = [
-            ("btn_practice",  "PRACTICE",  (0, 220, 180),   (0, 80, 60)),
-            ("btn_challenge", "CHALLENGE", (255, 190, 0),   (90, 60, 0)),
-            ("btn_freestyle", "FREE STYLE",(200, 100, 255), (70, 20, 100)),
+            ("btn_practice",    "PRACTICE",    (0, 220, 180),   (0, 80, 60)),
+            ("btn_challenge",   "CHALLENGE",   (255, 190, 0),   (90, 60, 0)),
+            ("btn_freestyle",   "FREE STYLE",  (200, 100, 255), (70, 20, 100)),
+            ("btn_leaderboard", "LEADERBOARD", (80, 180, 255),  (10, 50, 90)),
         ]
 
         for i, (btn_name, label, neon_col, fill_col) in enumerate(btn_defs):
@@ -1187,7 +1188,7 @@ class GameEngine:
 
             # 레이블
             txt_color = (255, 255, 255) if active else (180, 170, 200)
-            lbl = self._fonts["body"].render(label, True, txt_color)
+            lbl = self._fonts["result_big"].render(label, True, txt_color)
             self._display.blit(lbl, lbl.get_rect(center=rect.center))
 
         # ── 설정 / 종료 버튼 ────────────────────────────────────
@@ -1203,8 +1204,8 @@ class GameEngine:
         self._btn_rects["btn_quit"]     = btn_q_rect
 
         small_defs = [
-            (btn_s_rect, "btn_settings", "SETTINGS", (100, 120, 255), 3),
-            (btn_q_rect, "btn_quit",     "QUIT",     (255, 80,  80),  4),
+            (btn_s_rect, "btn_settings", "SETTINGS", (100, 120, 255), 4),
+            (btn_q_rect, "btn_quit",     "QUIT",     (255, 80,  80),  5),
         ]
         for rect, bname, label, ncol, focus_i in small_defs:
             focused = (self._menu_focus_idx == focus_i)
@@ -1223,41 +1224,48 @@ class GameEngine:
             if active:
                 self._draw_corner_brackets(self._display, rect,
                                            self._neon_color(ncol, tick * 2), size=10, width=2)
-            lbl = self._fonts["small"].render(label, True,
+            lbl = self._fonts["small_retro"].render(label, True,
                                               (255, 255, 255) if active else (160, 155, 180))
             self._display.blit(lbl, lbl.get_rect(center=rect.center))
 
         # ── 푸터 ─────────────────────────────────────────────────
         footer_col = (140, 110, 180)
-        footer = self._fonts["small"].render(
-            "UP/DOWN: SELECT   ENTER: CONFIRM   ESC: QUIT", True, footer_col
+        footer = self._fonts["small_retro"].render(
+            "U/D: SELECT   ENTER: CONFIRM   ESC: QUIT", True, footer_col
         )
         self._display.blit(footer, footer.get_rect(
-            center=(w // 2, h - MARGIN_BOTTOM // 2 - 2)))
+            center=(w // 2, h - MARGIN_BOTTOM + 6)))
 
         # ── 키보드 안내 박스 (타이틀 아래 우측) ──────────────────
         key_lines = [
-            ("KEYBOARD CONTROLS", (180, 180, 255)),
-            ("UP / DOWN   :  Move menu",       (200, 200, 220)),
-            ("ENTER       :  Select / Start",  (200, 200, 220)),
-            ("B / ESC     :  Back / Quit",     (200, 200, 220)),
-            ("P           :  Pause game",      (200, 200, 220)),
-            ("Q           :  Force quit",      (200, 200, 220)),
+            ("- KEYBOARD -",   (180, 180, 255)),
+            ("U/D/L/R : MOVE", (200, 200, 220)),
+            ("SPACE   : OK",   (200, 200, 220)),
+            ("B/ESC   : BACK", (200, 200, 220)),
+            ("P       : PAUSE",(200, 200, 220)),
+            ("Q       : QUIT", (200, 200, 220)),
         ]
-        kx = w - 14
+        kx = w - 10
         ky = MARGIN_TOP + 110
-        line_h = 18
-        box_w = 260
-        box_h = len(key_lines) * line_h + 14
+        line_h = 16
+        pad_x, pad_y = 8, 6
+        # 박스 너비를 폰트 실제 렌더 크기에 맞춤
+        max_txt_w = max(
+            self._fonts["small_retro"].render(txt, True, (0,0,0)).get_width()
+            for txt, _ in key_lines
+        )
+        box_w = max_txt_w + pad_x * 2
+        box_h = len(key_lines) * line_h + pad_y * 2
+        # 오른쪽 경계 안쪽에 딱 맞게
+        box_x = w - box_w - 6
         kb_surf = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
-        kb_surf.fill((20, 10, 50, 160))
-        self._display.blit(kb_surf, (kx - box_w, ky))
+        kb_surf.fill((20, 10, 50, 170))
+        self._display.blit(kb_surf, (box_x, ky))
         pygame.draw.rect(self._display, (80, 60, 130),
-                         pygame.Rect(kx - box_w, ky, box_w, box_h), 1, border_radius=6)
+                         pygame.Rect(box_x, ky, box_w, box_h), 1, border_radius=6)
         for li, (txt, col) in enumerate(key_lines):
-            f = self._fonts["small_retro"] if li == 0 else self._fonts["small"]
-            s = f.render(txt, True, col)
-            self._display.blit(s, (kx - box_w + 10, ky + 7 + li * line_h))
+            s = self._fonts["small_retro"].render(txt, True, col)
+            self._display.blit(s, (box_x + pad_x, ky + pad_y + li * line_h))
 
     def _render_song_select(self, w, h):
         """곡 선택 화면 — retro-fancy neon style."""
@@ -1361,7 +1369,7 @@ class GameEngine:
                 diff  = DIFF_STARS.get(song.get("difficulty", 0), "")
                 info  = f"BPM {song.get('bpm',0)}  ·  {song.get('duration',0)}s  ·  {diff}"
                 info_col = self._neon_color(mode_col, tick, 0.7) if selected else (130, 125, 160)
-                i_surf = self._fonts["small"].render(info, True, info_col)
+                i_surf = self._fonts["small_retro"].render(info, True, info_col)
                 self._display.blit(i_surf, (rect.x + 14, rect.y + card_h - 22))
 
             # ── 선택된 곡 상세 패널 (오른쪽) ─────────────────────
@@ -1398,7 +1406,7 @@ class GameEngine:
                 py_detail = panel.y + 14
 
                 for lbl_txt, val_txt in detail_items:
-                    lbl_s = self._fonts["small"].render(lbl_txt, True, (150, 140, 190))
+                    lbl_s = self._fonts["small_retro"].render(lbl_txt, True, (150, 140, 190))
                     val_s = self._fonts["body"].render(str(val_txt), True,
                                                         self._neon_color(mode_col, tick, 0.85))
                     self._display.blit(lbl_s, (panel.x + 16, py_detail))
@@ -1411,8 +1419,7 @@ class GameEngine:
                                          pw - 32, start_h)
                 self._btn_rects["btn_song_start"] = start_rect
                 hover_s   = start_rect.collidepoint(mouse_pos)
-                focused_s = (getattr(self, '_song_panel', 0) == 1 and
-                             getattr(self, '_song_btn_idx', 0) == 0)
+                focused_s = (self._song_focus_idx == len(songs))
 
                 btn_bg = pygame.Surface((start_rect.width, start_rect.height), pygame.SRCALPHA)
                 btn_bg.fill((*[c // 3 for c in mode_col], 220 if (hover_s or focused_s) else 160))
@@ -1432,8 +1439,8 @@ class GameEngine:
         back_rect = pygame.Rect(14, back_y, 140, 38)
         self._btn_rects["btn_song_back"] = back_rect
         hover_b   = back_rect.collidepoint(mouse_pos)
-        focused_b = (getattr(self, '_song_panel', 0) == 1 and
-                     getattr(self, '_song_btn_idx', 0) == 1)
+        songs_len = len(self._songs_for_mode(self._current_mode))
+        focused_b = (self._song_focus_idx == songs_len + 1)
 
         bb_surf = pygame.Surface((140, 38), pygame.SRCALPHA)
         bb_surf.fill((40, 25, 70, 200 if (hover_b or focused_b) else 140))
@@ -1441,17 +1448,14 @@ class GameEngine:
         self._draw_neon_rect(self._display, back_rect,
                              self._neon_color((160, 140, 220), tick) if (hover_b or focused_b) else (80, 65, 120),
                              width=2, radius=10, glow_radius=6 if (hover_b or focused_b) else 2)
-        back_s = self._fonts["body"].render("< BACK", True,
+        back_s = self._fonts["btn_retro"].render("< BACK", True,
                                              (220, 215, 240) if (hover_b or focused_b) else (160, 155, 185))
         self._display.blit(back_s, back_s.get_rect(center=back_rect.center))
 
-        # ── 패널 포커스 위치 안내 (우측 하단) ──────────────────────
-        if getattr(self, '_song_panel', 0) == 0:
-            nav_hint = "UP/DOWN: SELECT SONG   RIGHT: DETAILS   ESC: BACK"
-        else:
-            nav_hint = "UP/DOWN: START/BACK   LEFT: SONG LIST   ENTER: CONFIRM"
-        hint = self._fonts["small"].render(nav_hint, True, (130, 110, 170))
-        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 14)))
+        # ── 푸터 안내 ──────────────────────────────────────────────
+        nav_hint = "U/D:MOVE  R:START  L:BACK  ENTER:OK  ESC:MENU"
+        hint = self._fonts["small_retro"].render(nav_hint, True, (130, 110, 170))
+        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 22)))
 
     def _render_ready(self, w, h):
         """준비 화면: 좌=웹캠, 우=스켈레톤 + 전신 감지 안내 + OK 사인 대기."""
@@ -1480,7 +1484,7 @@ class GameEngine:
         # ── 왼쪽: 웹캠 피드 ──────────────────────────────────
         pygame.draw.rect(self._display, (12, 10, 30),
                          pygame.Rect(0, HEADER_H, MID_X, body_h))
-        lbl_cam = self._fonts["small"].render("MY CAM", True, (100, 160, 255))
+        lbl_cam = self._fonts["small_retro"].render("MY CAM", True, (100, 160, 255))
         self._display.blit(lbl_cam, (12, HEADER_H + 8))
 
         if self._ready_current_frame is not None:
@@ -1503,7 +1507,7 @@ class GameEngine:
         # ── 오른쪽: 스켈레톤 ─────────────────────────────────
         pygame.draw.rect(self._display, (10, 8, 28),
                          pygame.Rect(MID_X, HEADER_H, w - MID_X, body_h))
-        lbl_sk = self._fonts["small"].render("MY POSE", True, (255, 160, 80))
+        lbl_sk = self._fonts["small_retro"].render("MY POSE", True, (255, 160, 80))
         self._display.blit(lbl_sk, (MID_X + 12, HEADER_H + 8))
 
         # 전신 감지 여부 판단
@@ -1574,7 +1578,7 @@ class GameEngine:
                          skip_rect, border_radius=10)
         pygame.draw.rect(self._display, (255, 255, 100) if focused_s else (100, 200, 150),
                          skip_rect, 3 if focused_s else 2, border_radius=10)
-        skip_lbl = self._fonts["small"].render("SKIP", True, (255, 255, 255) if active_s else (200, 255, 220))
+        skip_lbl = self._fonts["small_retro"].render("SKIP", True, (255, 255, 255) if active_s else (200, 255, 220))
         self._display.blit(skip_lbl, skip_lbl.get_rect(center=skip_rect.center))
 
         # 취소 버튼
@@ -1587,7 +1591,7 @@ class GameEngine:
                          cancel_rect, border_radius=10)
         pygame.draw.rect(self._display, (255, 255, 100) if focused_c else (200, 100, 100),
                          cancel_rect, 3 if focused_c else 2, border_radius=10)
-        cancel_lbl = self._fonts["small"].render("CANCEL", True, (255, 255, 255) if active_c else (255, 200, 200))
+        cancel_lbl = self._fonts["small_retro"].render("CANCEL", True, (255, 255, 255) if active_c else (255, 200, 200))
         self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
 
     def _render_countdown(self, w, h):
@@ -1601,18 +1605,24 @@ class GameEngine:
         txt_surface = self._fonts["countdown"].render(str(count + 1), True, (0, 255, 255))
         self._display.blit(txt_surface, txt_surface.get_rect(center=(w // 2, h // 2)))
 
-        sub = self._fonts["body"].render("GET READY!", True, (180, 180, 220))
+        sub = self._fonts["result_big"].render("GET READY!", True, (180, 180, 220))
         self._display.blit(sub, sub.get_rect(center=(w // 2, h // 2 + 100)))
 
-        # 취소 버튼 (터치로 메뉴로 복귀)
+        # 취소 버튼 (방향키/Enter 접근 가능)
         cancel_rect = pygame.Rect(w // 2 - 100, h - 80, 200, 48)
         self._btn_rects["btn_countdown_cancel"] = cancel_rect
-        hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
-        pygame.draw.rect(self._display, (120, 40, 40) if hover else (80, 30, 30),
+        hover   = cancel_rect.collidepoint(pygame.mouse.get_pos())
+        focused = (getattr(self, '_generic_focus_idx', 0) == 0)
+        active  = hover or focused
+        pygame.draw.rect(self._display, (120, 40, 40) if active else (80, 30, 30),
                          cancel_rect, border_radius=12)
-        pygame.draw.rect(self._display, (200, 100, 100), cancel_rect, 2, border_radius=12)
-        lbl = self._fonts["body"].render("CANCEL", True, (255, 200, 200))
+        pygame.draw.rect(self._display, (255, 255, 100) if focused else (200, 100, 100),
+                         cancel_rect, 3 if focused else 2, border_radius=12)
+        lbl = self._fonts["btn_retro"].render("CANCEL", True, (255, 255, 255) if active else (255, 200, 200))
         self._display.blit(lbl, lbl.get_rect(center=cancel_rect.center))
+
+        hint = self._fonts["small_retro"].render("ESC: CANCEL  |  ENTER: CANCEL", True, (100, 90, 130))
+        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 36)))
 
     # ──────────────────────────────────────────────────────────
     #  공통 UI 헬퍼
@@ -1886,14 +1896,17 @@ class GameEngine:
         self._btn_rects["btn_pause"]         = pause_rect
         self._btn_rects["btn_gameplay_menu"] = menu_rect
 
-        for rect, label, base_c in [
+        for i, (rect, label, base_c) in enumerate([
             (pause_rect, "PAUSE", (55, 55, 130)),
             (menu_rect,  "MENU",  (100, 38, 38)),
-        ]:
-            hover = rect.collidepoint(mouse_pos)
-            color = tuple(min(c + 40, 255) for c in base_c) if hover else base_c
+        ]):
+            hover   = rect.collidepoint(mouse_pos)
+            focused = (getattr(self, '_generic_focus_idx', 0) == i)
+            active  = hover or focused
+            color   = tuple(min(c + 40, 255) for c in base_c) if active else base_c
             pygame.draw.rect(self._display, color, rect, border_radius=8)
-            pygame.draw.rect(self._display, (160, 160, 210), rect, 1, border_radius=8)
+            border_col = (255, 255, 100) if focused else (160, 160, 210)
+            pygame.draw.rect(self._display, border_col, rect, 2 if focused else 1, border_radius=8)
             lbl = self._fonts["btn_retro"].render(label, True, (240, 240, 240))
             self._display.blit(lbl, lbl.get_rect(center=rect.center))
 
@@ -2058,7 +2071,7 @@ class GameEngine:
         self._display.blit(overlay, (0, 0))
 
         # 타이틀
-        pause_txt = self._fonts["menu"].render("PAUSED", True, (255, 255, 255))
+        pause_txt = self._fonts["result_big"].render("PAUSED", True, (255, 255, 255))
         self._display.blit(pause_txt, pause_txt.get_rect(center=(w // 2, h // 2 - 80)))
 
         mouse_pos = pygame.mouse.get_pos()
@@ -2077,11 +2090,11 @@ class GameEngine:
             border_col = (255, 255, 100) if focused else (220, 220, 220)
             border_w   = 3 if focused else 2
             pygame.draw.rect(self._display, border_col, rect, border_w, border_radius=14)
-            lbl = self._fonts["menu"].render(label, True, (255, 255, 255))
+            lbl = self._fonts["btn_retro"].render(label, True, (255, 255, 255))
             self._display.blit(lbl, lbl.get_rect(center=rect.center))
 
-        hint = self._fonts["small"].render("P / SPACE: RESUME  |  ESC: MENU", True, (160, 160, 180))
-        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 30)))
+        hint = self._fonts["small_retro"].render("P / SPACE: RESUME  |  ESC: MENU", True, (160, 160, 180))
+        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 38)))
 
     def _render_result(self, w, h):
         """Render result screen."""
@@ -2153,15 +2166,17 @@ class GameEngine:
                 hit_surf = self._fonts["small_retro"].render(hit_text, True, (160, 160, 180))
                 self._display.blit(hit_surf, hit_surf.get_rect(center=(w // 2, y)))
 
-        # 버튼: 다시하기 / 메뉴 (하단 고정, 중앙 정렬)
+        # 버튼: 다시하기 / 곡 선택 / 메뉴 (하단 고정, 중앙 정렬)
         mouse_pos = pygame.mouse.get_pos()
-        btn_gap = 20
-        total_w = BTN_W * 2 + btn_gap
+        BTN_W = min(160, (w - 80) // 3)
+        btn_gap = 16
+        total_w = BTN_W * 3 + btn_gap * 2
         btn_x = w // 2 - total_w // 2
 
         btn_defs = [
-            ("btn_retry",       "RETRY",  (0, 140, 90)),
-            ("btn_result_menu", "MENU",   (100, 40, 120)),
+            ("btn_retry",        "RETRY",    (0, 140, 90)),
+            ("btn_result_songs", "SONGS",    (60, 100, 200)),
+            ("btn_result_menu",  "MENU",     (100, 40, 120)),
         ]
         for i, (btn_name, label, color) in enumerate(btn_defs):
             rect = pygame.Rect(btn_x + i * (BTN_W + btn_gap), btn_area_y, BTN_W, BTN_H)
@@ -2177,9 +2192,101 @@ class GameEngine:
             self._display.blit(lbl, lbl.get_rect(center=rect.center))
 
         hint = self._fonts["small_retro"].render(
-            "ENTER: MENU  |  ESC: MENU", True, (100, 100, 130)
+            "←/→: SELECT  ENTER: CONFIRM  ESC: MENU", True, (100, 100, 130)
         )
-        self._display.blit(hint, hint.get_rect(center=(w // 2, h - MARGIN_BOTTOM // 2)))
+        self._display.blit(hint, hint.get_rect(center=(w // 2, h - MARGIN_BOTTOM + 10)))
+
+    def _render_leaderboard(self, w, h):
+        """리더보드 화면 렌더링."""
+        import pygame
+
+        tick = self._neon_tick
+
+        # 배경 그라데이션
+        for y_i in range(h):
+            t = y_i / h
+            pygame.draw.line(self._display,
+                             (int(8 + 8*t), int(5 + 5*t), int(35 + 25*t)),
+                             (0, y_i), (w, y_i))
+        # 스캔라인
+        for y_i in range(0, h, 4):
+            scan = pygame.Surface((w, 1), pygame.SRCALPHA)
+            scan.fill((0, 0, 0, 35))
+            self._display.blit(scan, (0, y_i))
+
+        MARGIN_TOP = 30
+        MARGIN_BOTTOM = 50
+        BTN_H = 44
+        BTN_W = 120
+
+        # 타이틀
+        title_col = self._neon_color((80, 200, 255), tick)
+        title_surf = self._fonts["result_big"].render("LEADERBOARD", True, title_col)
+        glow = self._fonts["result_big"].render("LEADERBOARD", True, (10, 60, 100))
+        for dx, dy in [(-3,0),(3,0),(0,-3),(0,3)]:
+            self._display.blit(glow, glow.get_rect(center=(w//2+dx, MARGIN_TOP+28+dy)))
+        self._display.blit(title_surf, title_surf.get_rect(center=(w//2, MARGIN_TOP+28)))
+
+        line_col = self._neon_color((100, 160, 255), tick, 0.7)
+        pygame.draw.line(self._display, line_col,
+                         (w//4, MARGIN_TOP+50), (w*3//4, MARGIN_TOP+50), 1)
+
+        # 리더보드 데이터
+        entries = self._leaderboard
+        if self._leaderboard_filter:
+            entries = [e for e in entries if e.get("song_id") == self._leaderboard_filter]
+        entries = sorted(entries, key=lambda e: e.get("score", 0), reverse=True)
+
+        # 테이블 헤더
+        TABLE_TOP = MARGIN_TOP + 62
+        COL_W = max(50, (w - 40) // 5)
+        headers = ["RANK", "SONG", "SCORE", "GRADE", "DATE"]
+        header_xs = [20 + i * COL_W for i in range(5)]
+        header_col = (180, 180, 255)
+        for hi, (hdr, hx) in enumerate(zip(headers, header_xs)):
+            hs = self._fonts["small_retro"].render(hdr, True, header_col)
+            self._display.blit(hs, (hx, TABLE_TOP))
+
+        pygame.draw.line(self._display, (80, 60, 130),
+                         (16, TABLE_TOP+16), (w-16, TABLE_TOP+16), 1)
+
+        # 엔트리 목록
+        ROW_H = 22
+        max_rows = max(1, (h - MARGIN_BOTTOM - BTN_H - 20 - TABLE_TOP - 24) // ROW_H)
+        if not entries:
+            empty = self._fonts["small_retro"].render("No records yet!", True, (120, 120, 160))
+            self._display.blit(empty, empty.get_rect(center=(w//2, TABLE_TOP + 50)))
+        else:
+            for ri, entry in enumerate(entries[:max_rows]):
+                ry = TABLE_TOP + 24 + ri * ROW_H
+                row_col = (255, 220, 50) if ri == 0 else (200, 200, 220)
+                vals = [
+                    f"#{ri+1}",
+                    entry.get("title", entry.get("song_id", "?"))[:12],
+                    str(entry.get("score", 0)),
+                    entry.get("grade", "-"),
+                    entry.get("date", "")[:10],
+                ]
+                for vi, (val, vx) in enumerate(zip(vals, header_xs)):
+                    vs = self._fonts["small_retro"].render(val, True, row_col)
+                    self._display.blit(vs, (vx, ry))
+
+        # BACK 버튼
+        mouse_pos = pygame.mouse.get_pos()
+        back_rect = pygame.Rect(w//2 - BTN_W//2, h - MARGIN_BOTTOM - BTN_H + 6, BTN_W, BTN_H)
+        self._btn_rects["btn_lb_back"] = back_rect
+        focused = (getattr(self, "_generic_focus_idx", 0) == 0)
+        hover = back_rect.collidepoint(mouse_pos)
+        bc = (80, 30, 120)
+        draw_col = tuple(min(c+50, 255) for c in bc) if (focused or hover) else bc
+        pygame.draw.rect(self._display, draw_col, back_rect, border_radius=12)
+        border_c = (255, 255, 100) if focused else (180, 180, 220)
+        pygame.draw.rect(self._display, border_c, back_rect, 2 if not focused else 3, border_radius=12)
+        lbl = self._fonts["btn_retro"].render("BACK", True, (255, 255, 255))
+        self._display.blit(lbl, lbl.get_rect(center=back_rect.center))
+
+        hint = self._fonts["small_retro"].render("ESC / B: BACK", True, (100, 100, 130))
+        self._display.blit(hint, hint.get_rect(center=(w//2, h - 22)))
 
     def _render_settings(self, w, h):
         """Render settings screen."""
@@ -2216,7 +2323,7 @@ class GameEngine:
         start_y = content_top + ((content_bottom - content_top) - item_gap * num_items) // 2
 
         for i, text in enumerate(settings_items):
-            surf = self._fonts["body"].render(text, True, (180, 180, 200))
+            surf = self._fonts["small_retro"].render(text, True, (180, 180, 200))
             self._display.blit(surf, (w // 2 - 220, start_y + i * item_gap))
 
         # 뒤로가기 버튼 (하단 고정)
@@ -2230,11 +2337,11 @@ class GameEngine:
         border_col = (255, 255, 100) if focused else (180, 180, 230)
         border_w   = 3 if focused else 2
         pygame.draw.rect(self._display, border_col, back_rect, border_w, border_radius=14)
-        lbl = self._fonts["body"].render("< BACK", True, (255, 255, 255))
+        lbl = self._fonts["btn_retro"].render("< BACK", True, (255, 255, 255))
         self._display.blit(lbl, lbl.get_rect(center=back_rect.center))
 
-        hint = self._fonts["small"].render("ESC: BACK", True, (100, 100, 130))
-        self._display.blit(hint, hint.get_rect(center=(w // 2, h - MARGIN_BOTTOM // 2)))
+        hint = self._fonts["small_retro"].render("ESC: BACK", True, (100, 100, 130))
+        self._display.blit(hint, hint.get_rect(center=(w // 2, h - MARGIN_BOTTOM + 10)))
 
     def transition_to(self, new_state: str):
         """Transition to a new game state."""
@@ -2257,8 +2364,6 @@ class GameEngine:
         elif state == GameState.SONG_SELECT:
             self._selected_song_idx = 0
             self._song_focus_idx = 0
-            self._song_panel = 0      # 항상 곡목록 패널부터 시작
-            self._song_btn_idx = 0
         elif state == GameState.READY:
             # 준비 화면 진입 시 상태 초기화
             self._ready_current_frame = None
@@ -2400,6 +2505,52 @@ class GameEngine:
             pygame.mixer.music.pause()
         elif state == GameState.RESULT:
             self._result_data = self._scorer.get_final_result()
+            # 리더보드에 결과 저장
+            self._leaderboard_save_result()
+        elif state == GameState.LEADERBOARD:
+            self._leaderboard_load()
+            self._generic_focus_idx = 0
+
+    def _leaderboard_load(self):
+        """data/leaderboard.json 파일에서 리더보드를 로드한다."""
+        import json
+        lb_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "leaderboard.json")
+        lb_path = os.path.normpath(lb_path)
+        try:
+            with open(lb_path, "r", encoding="utf-8") as f:
+                self._leaderboard = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._leaderboard = []
+
+    def _leaderboard_save_result(self):
+        """현재 게임 결과를 리더보드 파일에 추가로 저장한다."""
+        import json
+        from datetime import datetime
+        if not self._result_data:
+            return
+        song = self._current_song or {}
+        entry = {
+            "song_id": song.get("id", "unknown"),
+            "title":   song.get("title", song.get("id", "Unknown")),
+            "score":   self._result_data.get("total_score", 0),
+            "grade":   self._result_data.get("final_grade", "-"),
+            "date":    datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+        lb_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "leaderboard.json")
+        lb_path = os.path.normpath(lb_path)
+        try:
+            with open(lb_path, "r", encoding="utf-8") as f:
+                records = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            records = []
+        records.append(entry)
+        # 점수 높은 순으로 정렬 후 최대 200개 유지
+        records = sorted(records, key=lambda e: e.get("score", 0), reverse=True)[:200]
+        try:
+            with open(lb_path, "w", encoding="utf-8") as f:
+                json.dump(records, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[WARN] 리더보드 저장 실패: {e}")
 
     def shutdown(self):
         """Clean up all resources."""
