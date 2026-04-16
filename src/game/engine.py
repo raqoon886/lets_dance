@@ -40,6 +40,19 @@ class GameEngine:
         self._embedding_extractor = None
         self._embedding_comparator = None
         self._scratch_comparator = None
+        self._scratch_model_name = None
+        self._embedding_model_name = None
+        self._scratch_reference_cache_dir = "data/cache/reference_embeddings"
+        self._embedding_reference_cache_dir = "data/cache/reference_embeddings"
+        self._scratch_use_reference_cache = True
+        self._embedding_use_reference_cache = True
+        self._fallback_pose_comparator = None
+        self._pose_hold_frames = 6
+        self._last_valid_landmarks = None
+        self._last_valid_landmarks_age_frames = 10**9
+        self._score_hold_seconds = 0.3
+        self._model_warmup_direct_fallback = True
+        self._fallback_similarity_method = "angle"
         self._warned_scratch_no_ref = False
         self._scorer = None
         self._ui = None
@@ -150,11 +163,20 @@ class GameEngine:
         )
         self._feedback_gen = FeedbackGenerator()
 
+        smoothing_cfg = self.config.get("runtime_smoothing", {})
+        self._pose_hold_frames = int(smoothing_cfg.get("pose_hold_frames", 6))
+        self._score_hold_seconds = float(smoothing_cfg.get("score_hold_seconds", 0.3))
+        self._model_warmup_direct_fallback = bool(
+            smoothing_cfg.get("model_warmup_direct_fallback", True))
+        self._fallback_similarity_method = smoothing_cfg.get(
+            "fallback_similarity", self.config.get("similarity_method", "angle"))
+
         # Pose similarity comparator
+        from direct_compare.pose_similarity import PoseSimilarity
         self._score_method = self.config.get("score_method", "direct")
         if self._score_method == "direct":
-            from direct_compare.pose_similarity import PoseSimilarity
             self._pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)
+            self._fallback_pose_comparator = self._pose_comparator
             self._similarity_method = self.config.get("similarity_method", "cosine")
             self._tolerance_delay = self.config.get("tolerance_delay", 1.0)
             self._embedding_extractor = None
@@ -167,6 +189,10 @@ class GameEngine:
             scratch_cfg = self.config.get("scratch", {})
             model_dir = scratch_cfg.get("model_dir", "data/models/scratch")
             model_name = scratch_cfg.get("model_name", "gcn_e64")
+            self._scratch_model_name = model_name
+            self._scratch_use_reference_cache = scratch_cfg.get("use_reference_cache", True)
+            self._scratch_reference_cache_dir = scratch_cfg.get(
+                "reference_cache_dir", "data/cache/reference_embeddings")
             model_path = resolve_scratch_model_path(
                 model_name=model_name,
                 model_dir=model_dir,
@@ -181,6 +207,7 @@ class GameEngine:
                 candidate_stride=scratch_cfg.get("candidate_stride", 3),
             )
             self._pose_comparator = None
+            self._fallback_pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)
             self._embedding_extractor = None
             self._similarity_method = "scratch"
             self._tolerance_delay = self.config.get("tolerance_delay", 1.0)
@@ -194,6 +221,10 @@ class GameEngine:
             embedding_cfg = self.config.get("embedding", {})
             model_dir = embedding_cfg.get("model_dir", "data/models/embedding")
             model_name = embedding_cfg.get("model_name", "dance_embedding")
+            self._embedding_model_name = model_name
+            self._embedding_use_reference_cache = embedding_cfg.get("use_reference_cache", True)
+            self._embedding_reference_cache_dir = embedding_cfg.get(
+                "reference_cache_dir", "data/cache/reference_embeddings")
             model_path = resolve_scratch_model_path(
                 model_name=model_name,
                 model_dir=model_dir,
@@ -208,6 +239,7 @@ class GameEngine:
                 candidate_stride=embedding_cfg.get("candidate_stride", 3),
             )
             self._pose_comparator = None
+            self._fallback_pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)
             self._embedding_extractor = None
             self._similarity_method = "embedding"
             self._tolerance_delay = self.config.get("tolerance_delay", 1.0)
@@ -880,6 +912,56 @@ class GameEngine:
             self._ready_full_body_start = 0.0
             self._ready_countdown = 0.0
 
+    def _mark_no_score_frame(self):
+        """Keep the latest feedback visible briefly when no new score is produced."""
+        if self._last_feedback is not None and self._feedback_timer <= 0 and self._score_hold_seconds > 0:
+            self._feedback_timer = self._score_hold_seconds
+
+    def _pose_similarity_with_method(self, comparator, user_landmarks, ref_landmarks, method):
+        if method == "euclidean":
+            return comparator.euclidean_similarity(user_landmarks, ref_landmarks)
+        if method == "hybrid":
+            return comparator.hybrid_similarity(user_landmarks, ref_landmarks)
+        if method == "angle":
+            return comparator.angle_similarity(user_landmarks, ref_landmarks)
+        return comparator.cosine_similarity(user_landmarks, ref_landmarks)
+
+    def _direct_window_similarity(self, user_landmarks, method=None, debug=False):
+        """Direct pose similarity over the delay tolerance window."""
+        comparator = self._pose_comparator or self._fallback_pose_comparator
+        if comparator is None or user_landmarks is None or self._ref_landmarks is None:
+            return None
+        if self._ref_frame_landmarks is None:
+            return None
+
+        method = method or self._similarity_method
+        tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
+        start_idx = max(0, self._ref_current_idx - tolerance_frames)
+        end_idx = self._ref_current_idx + 1
+
+        best_sims = []
+        for ri in range(start_idx, end_idx):
+            ref_lm = self._ref_landmarks[ri]
+            best_sims.append(
+                self._pose_similarity_with_method(comparator, user_landmarks, ref_lm, method)
+            )
+        if not best_sims:
+            return None
+
+        best_sims.sort(reverse=True)
+        top_k = best_sims[:min(3, len(best_sims))]
+        sim = sum(top_k) / len(top_k)
+
+        if debug:
+            sim_now = self._pose_similarity_with_method(
+                comparator, user_landmarks, self._ref_frame_landmarks, method)
+            print(
+                f"\r[DBG] now={sim_now:.3f} top3={sim:.3f} "
+                f"max={best_sims[0]:.3f} win={end_idx-start_idx}f",
+                end="",
+            )
+        return sim
+
     def _update_gameplay(self):
         """Fetch async frame and compute score."""
         import cv2
@@ -895,6 +977,21 @@ class GameEngine:
         self._current_frame = frame
         self._current_landmarks = lm
         self._pose_detected = detected
+
+        scoring_landmarks = None
+        if self._pose_detected and self._current_landmarks is not None:
+            scoring_landmarks = self._current_landmarks
+            self._last_valid_landmarks = np.asarray(self._current_landmarks, dtype=np.float32).copy()
+            self._last_valid_landmarks_age_frames = 0
+        elif (
+            self._last_valid_landmarks is not None
+            and self._last_valid_landmarks_age_frames < self._pose_hold_frames
+        ):
+            # 짧은 MediaPipe dropout은 마지막 정상 포즈로 채점해 UI 공백을 줄인다.
+            self._last_valid_landmarks_age_frames += 1
+            scoring_landmarks = self._last_valid_landmarks
+        else:
+            self._last_valid_landmarks_age_frames += 1
 
         # 참조 캐릭터 프레임 인덱싱 (30fps 기준)
         if self._ref_landmarks is not None and self._current_session:
@@ -941,84 +1038,54 @@ class GameEngine:
                 self._ref_video_frame = None
                 self._ref_video_surf = None
 
-        # Score based on pose similarity
-        if self._pose_detected:
+        # Score based on pose similarity. scoring_landmarks may be a held pose
+        # for a few frames when MediaPipe briefly drops detection.
+        sim = None
+        if scoring_landmarks is not None:
             if self._ref_frame_landmarks is not None:
                 if self._score_method == "direct":
-                    # direct: 반응 딜레이 윈도우 내 최대 유사도
-                    tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
-                    start_idx = max(0, self._ref_current_idx - tolerance_frames)
-                    end_idx = self._ref_current_idx + 1  # 현재 프레임 포함
-
-                    best_sims = []
-                    for ri in range(start_idx, end_idx):
-                        ref_lm = self._ref_landmarks[ri]
-                        if self._similarity_method == "euclidean":
-                            s = self._pose_comparator.euclidean_similarity(
-                                self._current_landmarks, ref_lm)
-                        elif self._similarity_method == "hybrid":
-                            s = self._pose_comparator.hybrid_similarity(
-                                self._current_landmarks, ref_lm)
-                        elif self._similarity_method == "angle":
-                            s = self._pose_comparator.angle_similarity(
-                                self._current_landmarks, ref_lm)
-                        else:
-                            s = self._pose_comparator.cosine_similarity(
-                                self._current_landmarks, ref_lm)
-                        best_sims.append(s)
-                    # 상위 3개 평균 (윈도우 내 순간 최대가 아닌 안정적 매칭)
-                    best_sims.sort(reverse=True)
-                    top_k = best_sims[:min(3, len(best_sims))]
-                    sim = sum(top_k) / len(top_k)
-
-                    # 디버그: 현재 프레임과만 비교한 값 vs 윈도우 최대값
-                    if self._similarity_method == "angle":
-                        sim_now = self._pose_comparator.angle_similarity(
-                            self._current_landmarks, self._ref_frame_landmarks)
-                    elif self._similarity_method == "euclidean":
-                        sim_now = self._pose_comparator.euclidean_similarity(
-                            self._current_landmarks, self._ref_frame_landmarks)
-                    elif self._similarity_method == "hybrid":
-                        sim_now = self._pose_comparator.hybrid_similarity(
-                            self._current_landmarks, self._ref_frame_landmarks)
-                    else:
-                        sim_now = self._pose_comparator.cosine_similarity(
-                            self._current_landmarks, self._ref_frame_landmarks)
-                    print(f"\r[DBG] now={sim_now:.3f} top3={sim:.3f} max={best_sims[0]:.3f} win={end_idx-start_idx}f", end="")
+                    sim = self._direct_window_similarity(
+                        scoring_landmarks,
+                        method=self._similarity_method,
+                        debug=True,
+                    )
                 elif self._score_method == "scratch":
-                    # scratch: compare recent user motion window with reference
-                    # motion windows through a scratch-trained TFLite encoder.
                     tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
                     sim = self._scratch_comparator.compute(
-                        self._current_landmarks,
+                        scoring_landmarks,
                         self._ref_landmarks,
                         self._ref_current_idx,
                         tolerance_frames=tolerance_frames,
                     )
-                    if sim is None:
-                        return
+                    if sim is None and self._model_warmup_direct_fallback:
+                        sim = self._direct_window_similarity(
+                            scoring_landmarks,
+                            method=self._fallback_similarity_method,
+                        )
                 else:
-                    # embedding: compare recent user motion window with
-                    # reference windows through a fine-tuned TFLite encoder.
                     tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
                     sim = self._embedding_comparator.compute(
-                        self._current_landmarks,
+                        scoring_landmarks,
                         self._ref_landmarks,
                         self._ref_current_idx,
                         tolerance_frames=tolerance_frames,
                     )
-                    if sim is None:
-                        return
+                    if sim is None and self._model_warmup_direct_fallback:
+                        sim = self._direct_window_similarity(
+                            scoring_landmarks,
+                            method=self._fallback_similarity_method,
+                        )
             else:
                 if self._score_method in ("scratch", "embedding"):
                     if not self._warned_scratch_no_ref:
                         print(f"[WARN] {self._score_method} scoring requires reference.npy; scoring paused.")
                         self._warned_scratch_no_ref = True
-                    return
-                # 레퍼런스 없으면 detection confidence로 대체
-                visibility = self._current_landmarks[:, 3]
-                mean_vis = float(np.mean(visibility[visibility > 0]))
-                sim = min(mean_vis, 1.0)
+                else:
+                    visibility = scoring_landmarks[:, 3]
+                    visible = visibility[visibility > 0]
+                    sim = min(float(np.mean(visible)), 1.0) if len(visible) else 0.0
+
+        if sim is not None:
             evaluation = self._scorer.evaluate(sim)
             fb = self._feedback_gen.generate(evaluation)
             if fb:
@@ -1034,6 +1101,7 @@ class GameEngine:
                     color = fb.get("color", (255, 255, 255))
                     self._spawn_particles(w_d // 2, h_d // 2, color, particle_count)
         else:
+            self._mark_no_score_frame()
             self._feedback_gen.update()
 
         # 피드백 타이머 감소
@@ -2285,6 +2353,8 @@ class GameEngine:
                 self._feedback_timer = 0.0
                 self._current_frame = None
                 self._pose_detected = False
+                self._last_valid_landmarks = None
+                self._last_valid_landmarks_age_frames = 10**9
                 if self._scratch_comparator is not None:
                     self._scratch_comparator.reset()
                 if self._embedding_comparator is not None:
@@ -2312,12 +2382,42 @@ class GameEngine:
                             ref_data = np.concatenate([ref_data, vis], axis=2)
                         self._ref_landmarks = ref_data.astype(np.float32)
                         print(f"[INFO] 참조 랜드마크 로드: {self._ref_landmarks.shape}")
-                        
-                        # 백그라운드 프리워밍(Pre-computing Warm-up) 실행
+
+                        # Reference embedding cache가 있으면 디스크에서 로드하고,
+                        # 없으면 기존처럼 백그라운드 TFLite warmup으로 fallback한다.
+                        dance_name = os.path.basename(self._current_song["path"])
+                        project_root = os.path.dirname(os.path.dirname(
+                            os.path.dirname(os.path.abspath(__file__))))
                         if getattr(self, '_scratch_comparator', None):
-                            self._scratch_comparator.warmup_reference_embeddings(self._ref_landmarks)
+                            loaded = False
+                            if self._scratch_use_reference_cache:
+                                cache_dir = self._scratch_reference_cache_dir
+                                if not os.path.isabs(cache_dir):
+                                    cache_dir = os.path.join(project_root, cache_dir)
+                                loaded = self._scratch_comparator.load_reference_embedding_cache(
+                                    cache_dir=cache_dir,
+                                    dance_name=dance_name,
+                                    model_kind="scratch",
+                                    model_name=self._scratch_model_name,
+                                    reference_path=ref_path,
+                                )
+                            if not loaded:
+                                self._scratch_comparator.warmup_reference_embeddings(self._ref_landmarks)
                         elif getattr(self, '_embedding_comparator', None):
-                            self._embedding_comparator.warmup_reference_embeddings(self._ref_landmarks)
+                            loaded = False
+                            if self._embedding_use_reference_cache:
+                                cache_dir = self._embedding_reference_cache_dir
+                                if not os.path.isabs(cache_dir):
+                                    cache_dir = os.path.join(project_root, cache_dir)
+                                loaded = self._embedding_comparator.load_reference_embedding_cache(
+                                    cache_dir=cache_dir,
+                                    dance_name=dance_name,
+                                    model_kind="embedding",
+                                    model_name=self._embedding_model_name,
+                                    reference_path=ref_path,
+                                )
+                            if not loaded:
+                                self._embedding_comparator.warmup_reference_embeddings(self._ref_landmarks)
                             
                     except Exception as e:
                         print(f"[WARN] 참조 랜드마크 로드 실패: {e}")
