@@ -115,23 +115,31 @@ class GameEngine:
         pygame.display.set_caption("Let's Dance!")
         self._clock = pygame.time.Clock()
 
-        # Camera
+        # Camera & Pose Detector (Async Thread)
         cam_cfg = self.config.get("camera", {})
-        self._camera = cv2.VideoCapture(cam_cfg.get("device_id", 0))
-        self._camera.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg.get("width", 640))
-        self._camera.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg.get("height", 480))
-
-        # Pose detector
-        from pose.detector import PoseDetector
         pose_cfg = self.config.get("pose", {})
         backend = self.config.get("pose_backend", "mediapipe")
-        self._pose_detector = PoseDetector(
+
+        from pose.detector import PoseDetector
+        pose_detector = PoseDetector(
             backend=backend,
             model_complexity=pose_cfg.get("model_complexity", 1),
             min_detection_confidence=pose_cfg.get("min_detection_confidence", 0.5),
             min_tracking_confidence=pose_cfg.get("min_tracking_confidence", 0.5),
         )
-        self._pose_detector.initialize()
+        pose_detector.initialize()
+
+        from utils.async_camera import AsyncCameraPose
+        self._async_camera = AsyncCameraPose(
+            camera_idx=cam_cfg.get("device_id", 0),
+            width=cam_cfg.get("width", 640),
+            height=cam_cfg.get("height", 480),
+            pose_detector=pose_detector,
+        )
+        self._async_camera.start()
+
+        self._camera = None  # Deprecated
+        self._pose_detector = None  # Deprecated
 
         # Scorer & Feedback
         from scoring.scorer import DanceScorer
@@ -826,14 +834,11 @@ class GameEngine:
             else:
                 self._countdown_timer = remaining
 
-            # 카운트다운 중 카메라+포즈 워밍업 (렉 방지)
-            import cv2
-            if self._camera is not None:
-                ret, frame = self._camera.read()
+            # 카운트다운 중 카메라 프레임 워밍업
+            if getattr(self, '_async_camera', None) is not None:
+                ret, frame, _, _ = self._async_camera.read()
                 if ret:
-                    frame = cv2.flip(frame, 1)
                     self._current_frame = frame
-                    self._pose_detector.detect(frame)  # 모델 워밍업
 
         elif self.state == GameState.PLAYING:
             self._update_gameplay()
@@ -841,22 +846,15 @@ class GameEngine:
         # PAUSED 상태에서는 카메라/포즈 업데이트 중단
 
     def _update_ready(self):
-        """READY 상태: 웹캠 + 포즈 감지. 발목까지 감지되면 3초 카운트다운 후 시작."""
-        import cv2
+        """READY 상태: 비동기 카메라로부터 포즈 감지 및 카운트다운."""
+        if getattr(self, '_async_camera', None) is not None:
+            ret, frame, lm, detected = self._async_camera.read()
+            if not ret:
+                return
 
-        if self._camera is None:
-            return
-
-        ret, frame = self._camera.read()
-        if not ret:
-            return
-
-        frame = cv2.flip(frame, 1)
-        self._ready_current_frame = frame
-
-        result = self._pose_detector.detect(frame)
-        self._ready_landmarks = result["landmarks"]
-        self._ready_pose_detected = result["detected"]
+            self._ready_current_frame = frame
+            self._ready_landmarks = lm
+            self._ready_pose_detected = detected
 
         # 전신(발목) 감지 여부 확인
         full_body = False
@@ -883,25 +881,20 @@ class GameEngine:
             self._ready_countdown = 0.0
 
     def _update_gameplay(self):
-        """Capture frame, detect pose, compute score."""
+        """Fetch async frame and compute score."""
         import cv2
         import numpy as np
 
-        if self._camera is None:
+        if getattr(self, '_async_camera', None) is None:
             return
 
-        ret, frame = self._camera.read()
+        ret, frame, lm, detected = self._async_camera.read()
         if not ret:
             return
 
-        # 좌우반전 (거울 모드 — 사용자가 자연스럽게 보이도록)
-        frame = cv2.flip(frame, 1)
         self._current_frame = frame
-
-        # Detect pose
-        result = self._pose_detector.detect(frame)
-        self._current_landmarks = result["landmarks"]
-        self._pose_detected = result["detected"]
+        self._current_landmarks = lm
+        self._pose_detected = detected
 
         # 참조 캐릭터 프레임 인덱싱 (30fps 기준)
         if self._ref_landmarks is not None and self._current_session:
@@ -2404,10 +2397,8 @@ class GameEngine:
     def shutdown(self):
         """Clean up all resources."""
         self.running = False
-        if self._pose_detector:
-            self._pose_detector.release()
-        if self._camera:
-            self._camera.release()
+        if getattr(self, '_async_camera', None) is not None:
+            self._async_camera.stop()
         if self._ref_video_cap is not None:
             self._ref_video_cap.release()
             self._ref_video_cap = None
