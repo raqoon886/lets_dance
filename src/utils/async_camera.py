@@ -50,6 +50,8 @@ class AsyncCameraPose:
         while self._running:
             ret, frame = self._camera.read()
             if ret and frame is not None:
+                # 캡처 직후 즉시 좌우 반전 처리 (UI 표시 및 추론용 통일)
+                frame = cv2.flip(frame, 1)
                 with self._raw_frame_lock:
                     self._latest_raw_frame = frame
 
@@ -68,8 +70,7 @@ class AsyncCameraPose:
                 time.sleep(0.005)
                 continue
 
-            # (거울 모드) 사용자가 자연스럽게 보이도록 좌우 반전
-            frame = cv2.flip(frame, 1)
+            # (거울 모드 처리는 _capture_loop에서 이미 완료됨)
 
             landmarks = None
             detected = False
@@ -90,11 +91,24 @@ class AsyncCameraPose:
         Returns:
             (ret, frame, landmarks, detected)
         """
+        # 가장 따끈따끈한 라이브 프레임 즉시 추출 (UI 디스플레이 딜레이 전면 차단)
+        display_frame = None
+        with self._raw_frame_lock:
+            if self._latest_raw_frame is not None:
+                display_frame = self._latest_raw_frame.copy()
+
         with self._lock:
-            if self._latest_frame is None:
+            # 랜드마크는 MediaPipe 추론 속도에 맞춰 약간 과거의 데이터일 수 있음
+            landmarks = self._latest_landmarks
+            detected = self._latest_detected
+            
+            if display_frame is None and self._latest_frame is None:
                 return False, None, None, False
-            # 임계영역 최소화 및 충돌 방지를 위해 frame 복제
-            return True, self._latest_frame.copy(), self._latest_landmarks, self._latest_detected
+                
+            if display_frame is None:
+                display_frame = self._latest_frame.copy()
+
+            return True, display_frame, landmarks, detected
 
     def stop(self):
         """Gracefully stop the thread and release resources."""
