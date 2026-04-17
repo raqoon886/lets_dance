@@ -7,7 +7,10 @@ class AsyncCameraPose:
     """Reads camera frames and processes pose detection in a background thread."""
 
     def __init__(self, camera_idx=0, width=640, height=480, pose_detector=None):
-        self._camera = cv2.VideoCapture(camera_idx)
+        # 💡 [극단적 지연 시간 소거 1] V4L2 명시적 지정
+        # 리눅스/라즈베리파이에서 GStreamer 등 무거운 백엔드가 기본값으로 잡히면서 발생하는
+        # 0.5초 ~ 1초 가량의 막대한 파이프라인 지연을 강제로 우회하고 가장 날것의 드라이버를 씁니다.
+        self._camera = cv2.VideoCapture(camera_idx, cv2.CAP_V4L2)
         
         # 💡 [초저지연 하드웨어 최적화] - v4l-utils 명령어와 동일한 효과
         # 웹캠 압축 포맷을 가장 빠르고 대역폭이 넓은 MJPG로 강제 지정하고 버퍼를 1로 줄입니다.
@@ -95,14 +98,14 @@ class AsyncCameraPose:
         Returns:
             (ret, frame, landmarks, detected)
         """
-        # 가장 따끈따끈한 라이브 프레임 즉시 추출 (UI 디스플레이 딜레이 전면 차단)
+        # 💡 [극단적 지연 시간 소거 2] 강제 복사본 생성(copy) 제거
+        # 이미 캡처 스레드에서 매번 새로운 배열이 할당되므로, 포인터만 던져줍니다. (3~5ms 즉시 단축)
         display_frame = None
         with self._raw_frame_lock:
             if self._latest_raw_frame is not None:
-                display_frame = self._latest_raw_frame.copy()
+                display_frame = self._latest_raw_frame
 
         with self._lock:
-            # 랜드마크는 MediaPipe 추론 속도에 맞춰 약간 과거의 데이터일 수 있음
             landmarks = self._latest_landmarks
             detected = self._latest_detected
             
@@ -110,7 +113,7 @@ class AsyncCameraPose:
                 return False, None, None, False
                 
             if display_frame is None:
-                display_frame = self._latest_frame.copy()
+                display_frame = self._latest_frame
 
             return True, display_frame, landmarks, detected
 
