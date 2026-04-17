@@ -1102,7 +1102,9 @@ class GameEngine:
         # Score based on pose similarity. scoring_landmarks may be a held pose
         # for a few frames when MediaPipe briefly drops detection.
         sim = None
-        if scoring_landmarks is not None:
+        if self._current_mode == "freestyle":
+            pass  # 프리스타일: 채점 없음
+        elif scoring_landmarks is not None:
             if self._ref_frame_landmarks is not None:
                 if self._score_method == "direct":
                     sim = self._direct_window_similarity(
@@ -1154,14 +1156,14 @@ class GameEngine:
                 self._feedback_timer = 1.2  # 1.2초 동안 표시
                 self._feedback_age   = 0.0  # 애니메이션 경과 시간 리셋
                 text = fb.get("text", "")
-                # ── 챌린지 모드 연속 MISS 카운터 ──────────────
-                if self._current_mode == "challenge":
-                    if text == "MISS":
-                        self._consecutive_miss += 1
-                        if self._consecutive_miss >= 10000000:
-                            self._challenge_game_over = True
-                    else:
-                        self._consecutive_miss = 0
+                # ── 챌린지 모드 연속 MISS 카운터 (비활성화 - 테스트 원활화) ──────────────
+                # if self._current_mode == "challenge":
+                #     if text == "MISS":
+                #         self._consecutive_miss += 1
+                #         if self._consecutive_miss >= 100:
+                #             self._challenge_game_over = True
+                #     else:
+                #         self._consecutive_miss = 0
                 # 파티클 폭발 효과 — fb["text"]로 등급 판단
                 particle_map = {"PERFECT!": 60, "GREAT!": 40, "GOOD": 25}
                 particle_count = particle_map.get(text, 0)
@@ -1499,7 +1501,12 @@ class GameEngine:
 
                 # 곡 정보
                 diff  = DIFF_STARS.get(song.get("difficulty", 0), "")
-                info  = f"BPM {song.get('bpm',0)}  ·  {song.get('duration',0)}s  ·  {diff}"
+                dur   = int(round(song.get('duration', 0)))
+                mode_list = song.get('mode', [])
+                if 'practice' in mode_list or 'freestyle' in mode_list:
+                    info = f"BPM {song.get('bpm',0)}  ·  {dur}s"
+                else:
+                    info = f"BPM {song.get('bpm',0)}  ·  {dur}s  ·  {diff}"
                 info_col = self._neon_color(mode_col, tick, 0.7) if selected else (130, 125, 160)
                 i_surf = self._fonts["small_retro"].render(info, True, info_col)
                 self._display.blit(i_surf, (rect.x + 14, rect.y + card_h - 22))
@@ -1530,9 +1537,12 @@ class GameEngine:
                     ("TITLE",    sel.get("title", "-")),
                     ("ARTIST",   sel.get("artist", "-")),
                     ("BPM",      str(sel.get("bpm", 0))),
-                    ("LENGTH",   f"{sel.get('duration', 0)}s"),
-                    ("LEVEL",    DIFF_STARS.get(sel.get("difficulty", 0), "-")),
+                    ("LENGTH",   f"{int(round(sel.get('duration', 0)))}s"),
                 ]
+                sel_modes = sel.get('mode', [])
+                if 'practice' not in sel_modes and 'freestyle' not in sel_modes:
+                    detail_items.append(
+                        ("LEVEL",    DIFF_STARS.get(sel.get("difficulty", 0), "-")))
                 avail_h   = panel.height - start_h - start_m * 2 - 16
                 item_h    = min(54, max(38, avail_h // max(len(detail_items), 1)))
                 py_detail = panel.y + 14
@@ -1623,7 +1633,7 @@ class GameEngine:
         song  = self._current_song or {}
         song_title = song.get("title", "")
         bpm_val    = song.get("bpm", 0)
-        dur_val    = song.get("duration", 0)
+        dur_val    = int(round(song.get("duration", 0)))
         diff_map   = {0:"FREE",1:"★☆☆☆☆",2:"★★☆☆☆",3:"★★★☆☆",4:"★★★★☆",5:"★★★★★"}
         diff_lbl   = diff_map.get(song.get("difficulty", 0), "")
         mode_color = {"practice":(0,220,180),"challenge":(255,190,0),"freestyle":(200,100,255)}
@@ -1633,7 +1643,10 @@ class GameEngine:
         self._display.blit(hdr, hdr.get_rect(center=(w // 2, HEADER_H // 2)))
         # BPM / 길이 / 난이도 (오른쪽 상단)
         if bpm_val or dur_val:
-            info_str = f"BPM {bpm_val}  |  {dur_val}s  |  {diff_lbl}"
+            if self._current_mode in ("practice", "freestyle"):
+                info_str = f"BPM {bpm_val}  |  {dur_val}s"
+            else:
+                info_str = f"BPM {bpm_val}  |  {dur_val}s  |  {diff_lbl}"
             info_surf = self._fonts["small_retro"].render(info_str, True, self._neon_color(mcol, self._neon_tick, 0.8))
             self._display.blit(info_surf, info_surf.get_rect(midright=(w - 12, HEADER_H // 2)))
 
@@ -1919,8 +1932,14 @@ class GameEngine:
         self._display.fill((6, 4, 18))
 
         # ── 패널 영역 ──────────────────────────────────────────────
-        left_rect  = pygame.Rect(0,     BODY_Y, MID_X,     BODY_H)
-        right_rect = pygame.Rect(MID_X, BODY_Y, w - MID_X, BODY_H)
+        is_freestyle = (self._current_mode == "freestyle")
+        if is_freestyle:
+            # freestyle: 유저 카메라만 전체 화면
+            left_rect  = pygame.Rect(0, BODY_Y, w, BODY_H)
+            right_rect = pygame.Rect(0, 0, 0, 0)  # 사용 안 함
+        else:
+            left_rect  = pygame.Rect(0,     BODY_Y, MID_X,     BODY_H)
+            right_rect = pygame.Rect(MID_X, BODY_Y, w - MID_X, BODY_H)
 
         # ══════════════════════════════════════════════════════
         #  LEFT — 웹캠 + 스켈레톤 오버레이 (전체 패널 크기)
@@ -1928,8 +1947,17 @@ class GameEngine:
         pygame.draw.rect(self._display, (8, 8, 22), left_rect)
 
         if hasattr(self, '_current_frame') and self._current_frame is not None:
-            cam_w_target = MID_X - BORDER * 2
-            cam_h_target = BODY_H - BORDER * 2
+            panel_w = left_rect.width - BORDER * 2
+            panel_h = BODY_H - BORDER * 2
+
+            # 카메라 원본 비율 유지하면서 패널에 맞추기 (letterbox)
+            src_h, src_w = self._current_frame.shape[:2]
+            scale = min(panel_w / src_w, panel_h / src_h)
+            cam_w_target = int(src_w * scale)
+            cam_h_target = int(src_h * scale)
+            cam_x_offset = left_rect.x + BORDER + (panel_w - cam_w_target) // 2
+            cam_y_offset = BODY_Y + BORDER + (panel_h - cam_h_target) // 2
+
             frame_bgr = cv2.resize(self._current_frame,
                                    (cam_w_target, cam_h_target),
                                    interpolation=cv2.INTER_NEAREST)
@@ -1957,7 +1985,7 @@ class GameEngine:
             frame_rgb = frame_bgr[:, :, ::-1]
             cam_surf  = pygame.image.frombuffer(
                 frame_rgb.tobytes(), (cam_w_target, cam_h_target), "RGB")
-            self._display.blit(cam_surf, (BORDER, BODY_Y + BORDER))
+            self._display.blit(cam_surf, (cam_x_offset, cam_y_offset))
         else:
             no_cam = self._fonts["body"].render("NO CAMERA", True, (80, 80, 110))
             self._display.blit(no_cam, no_cam.get_rect(center=left_rect.center))
@@ -1965,37 +1993,38 @@ class GameEngine:
         # 좌 패널 레이블은 나중에 테두리와 함께 그린다 (effects 위)
 
         # ══════════════════════════════════════════════════════
-        #  RIGHT — 레퍼런스 영상 / 스틱피겨
+        #  RIGHT — 레퍼런스 영상 / 스틱피겨 (freestyle이면 건너뜀)
         # ══════════════════════════════════════════════════════
-        pygame.draw.rect(self._display, (10, 6, 22), right_rect)
+        if not is_freestyle:
+            pygame.draw.rect(self._display, (10, 6, 22), right_rect)
 
-        has_video = getattr(self, '_async_video_player', None) is not None
+            has_video = getattr(self, '_async_video_player', None) is not None
 
-        if has_video and self._ref_video_surf is not None:
-            vx, vy = self._ref_video_pos
-            self._display.blit(self._ref_video_surf, (vx, vy))
-        elif not has_video and self._ref_frame_landmarks is not None:
-            right_fig_rect = (right_rect.x, BODY_Y, right_rect.width, BODY_H)
-            self._draw_stick_figure(
-                self._display,
-                self._ref_frame_landmarks,
-                right_fig_rect,
-                line_color=(255, 180, 60),
-                joint_color=(255, 230, 120),
-                line_width=4,
-                joint_radius=6,
-            )
-        else:
-            no_guide = self._fonts["body"].render("NO GUIDE", True, (80, 70, 60))
-            self._display.blit(no_guide, no_guide.get_rect(center=right_rect.center))
+            if has_video and self._ref_video_surf is not None:
+                vx, vy = self._ref_video_pos
+                self._display.blit(self._ref_video_surf, (vx, vy))
+            elif not has_video and self._ref_frame_landmarks is not None:
+                right_fig_rect = (right_rect.x, BODY_Y, right_rect.width, BODY_H)
+                self._draw_stick_figure(
+                    self._display,
+                    self._ref_frame_landmarks,
+                    right_fig_rect,
+                    line_color=(255, 180, 60),
+                    joint_color=(255, 230, 120),
+                    line_width=4,
+                    joint_radius=6,
+                )
+            else:
+                no_guide = self._fonts["body"].render("NO GUIDE", True, (80, 70, 60))
+                self._display.blit(no_guide, no_guide.get_rect(center=right_rect.center))
 
         # 우 패널 레이블은 나중에 테두리와 함께 그린다 (effects 위)
 
         # ── 파티클 업데이트 & 렌더링 ────────────────────────────────
         self._update_and_draw_particles()
 
-        # ── 피드백 이펙트 오버레이 ──────────────────────────────────
-        if self._last_feedback and self._feedback_timer > 0:
+        # ── 피드백 이펙트 오버레이 (프리스타일에서는 숨김) ──────────────────
+        if self._last_feedback and self._feedback_timer > 0 and not is_freestyle:
             self._draw_feedback_effect(w, h, MID_X, BODY_Y, BODY_H)
 
         # ── 패널 풀 테두리 + 레이블 (effects 위에 그려 항상 보임) ─────
@@ -2003,12 +2032,14 @@ class GameEngine:
         right_border_col = self._neon_color((255, 160, 40), tick, 0.9)
         # glow_radius=0 → 안쪽으로 번지지 않는 단순 테두리
         self._draw_neon_rect(self._display, left_rect,  left_border_col,  width=3, radius=0, glow_radius=0)
-        self._draw_neon_rect(self._display, right_rect, right_border_col, width=3, radius=0, glow_radius=0)
+        if not is_freestyle:
+            self._draw_neon_rect(self._display, right_rect, right_border_col, width=3, radius=0, glow_radius=0)
 
         lbl_me    = self._fonts["small_retro"].render("ME",    True, (120, 200, 255))
         lbl_guide = self._fonts["small_retro"].render("GUIDE", True, (255, 180, 80))
         self._display.blit(lbl_me,    (BORDER + 8,           BODY_Y + BORDER + 6))
-        self._display.blit(lbl_guide, (MID_X + BORDER + 8,  BODY_Y + BORDER + 6))
+        if not is_freestyle:
+            self._display.blit(lbl_guide, (MID_X + BORDER + 8,  BODY_Y + BORDER + 6))
 
         # ══════════════════════════════════════════════════════
         #  HEADER
@@ -2019,18 +2050,20 @@ class GameEngine:
         hdr_line_col = self._neon_color((80, 60, 160), tick, 0.5)
         pygame.draw.line(self._display, hdr_line_col, (0, HEADER_H), (w, HEADER_H), 2)
 
-        # 점수 (레트로 폰트)
-        score_col = self._neon_color((0, 255, 200), tick)
-        score_surf = self._fonts["score"].render(
-            f"{int(self._scorer.total_score):06d}", True, score_col)
-        self._display.blit(score_surf, score_surf.get_rect(midleft=(16, HEADER_H // 2)))
+        # 점수 (레트로 폰트) — 프리스타일에서는 숨김
+        if self._current_mode != "freestyle":
+            score_col = self._neon_color((0, 255, 200), tick)
+            score_surf = self._fonts["score"].render(
+                f"{int(self._scorer.total_score):06d}", True, score_col)
+            self._display.blit(score_surf, score_surf.get_rect(midleft=(16, HEADER_H // 2)))
 
-        # 콤보
-        combo_val = self._scorer.combo
-        if combo_val > 0:
-            combo_col = self._neon_color((255, 230, 0), tick)
-            combo_surf = self._fonts["score"].render(f"{combo_val}x COMBO", True, combo_col)
-            self._display.blit(combo_surf, combo_surf.get_rect(center=(w // 2, HEADER_H // 2)))
+        # 콤보 — 프리스타일에서는 숨김
+        if self._current_mode != "freestyle":
+            combo_val = self._scorer.combo
+            if combo_val > 0:
+                combo_col = self._neon_color((255, 230, 0), tick)
+                combo_surf = self._fonts["score"].render(f"{combo_val}x COMBO", True, combo_col)
+                self._display.blit(combo_surf, combo_surf.get_rect(center=(w // 2, HEADER_H // 2)))
 
         # 남은 시간
         elapsed  = self._current_session.elapsed_time if self._current_session else 0
@@ -2081,17 +2114,11 @@ class GameEngine:
             f"[{mode_label}]  {song_title}", True, mode_col_ft)
         self._display.blit(footer_left, (14, ROW1_Y))
 
-        if self._current_mode == "challenge" and self._consecutive_miss > 0:
-            miss_left = 10 - self._consecutive_miss
-            warn_col  = (255, 80, 80) if miss_left <= 3 else (255, 180, 0)
-            warn_txt  = self._fonts["small_retro"].render(
-                f"MISS x{self._consecutive_miss}  ({miss_left} LEFT!)", True, warn_col)
-            self._display.blit(warn_txt, warn_txt.get_rect(midright=(w - 14, ROW1_Y + 8)))
-        else:
-            footer_right = self._fonts["small_retro"].render(
-                "P: PAUSE  |  ESC: MENU", True, (80, 80, 110))
-            self._display.blit(footer_right,
-                               footer_right.get_rect(midright=(w - 10, ROW1_Y + 8)))
+        # (MISS 카운터 UI 삭제됨)
+        footer_right = self._fonts["small_retro"].render(
+            "P: PAUSE  |  ESC: MENU", True, (80, 80, 110))
+        self._display.blit(footer_right,
+                           footer_right.get_rect(midright=(w - 10, ROW1_Y + 8)))
 
         # 2행: 진행 바 + 남은 시간
         ROW2_Y = fy + FOOTER_H // 2 + 4
@@ -2337,43 +2364,49 @@ class GameEngine:
 
         if self._result_data:
             data = self._result_data
-            items = [
-                (f"SCORE:     {data.get('total_score', 0)}",    (0, 255, 200)),
-                (f"MAX COMBO: {data.get('max_combo', 0)}",      (255, 220, 0)),
-                (f"MOVES:     {data.get('total_moves', 0)}",    (200, 200, 220)),
-                (f"AVG:       {data.get('average_score', 0):.1f}", (180, 180, 255)),
-                (f"GRADE:     {data.get('final_grade', '-')}",  (255, 180, 0)),
-            ]
 
-            hits = data.get("hit_counts", {})
-            total_items = len(items) + (1 if hits else 0)
-            item_gap = min(48, max(30, (content_bottom - content_top) // max(total_items, 1)))
+            if self._current_mode == "freestyle":
+                # 프리스타일: 점수 없이 완료 메시지만
+                msg = self._fonts["result_big"].render("GREAT MOVES!", True, self._neon_color((200, 100, 255), tick))
+                self._display.blit(msg, msg.get_rect(center=(w // 2, (content_top + content_bottom) // 2)))
+            else:
+                items = [
+                    (f"SCORE:     {data.get('total_score', 0)}",    (0, 255, 200)),
+                    (f"MAX COMBO: {data.get('max_combo', 0)}",      (255, 220, 0)),
+                    (f"MOVES:     {data.get('total_moves', 0)}",    (200, 200, 220)),
+                    (f"AVG:       {data.get('average_score', 0):.1f}", (180, 180, 255)),
+                    (f"GRADE:     {data.get('final_grade', '-')}",  (255, 180, 0)),
+                ]
 
-            y = content_top
-            for text, color in items:
-                surf = self._fonts["result_big"].render(text, True, color)
-                self._display.blit(surf, surf.get_rect(center=(w // 2, y)))
-                y += item_gap
+                hits = data.get("hit_counts", {})
+                total_items = len(items) + (1 if hits else 0)
+                item_gap = min(48, max(30, (content_bottom - content_top) // max(total_items, 1)))
 
-            if hits:
-                y += 4
-                hit_text = "  |  ".join(f"{k}: {v}" for k, v in hits.items())
-                hit_surf = self._fonts["small_retro"].render(hit_text, True, (160, 160, 180))
-                self._display.blit(hit_surf, hit_surf.get_rect(center=(w // 2, y)))
-                y += item_gap
+                y = content_top
+                for text, color in items:
+                    surf = self._fonts["result_big"].render(text, True, color)
+                    self._display.blit(surf, surf.get_rect(center=(w // 2, y)))
+                    y += item_gap
 
-            # 리더보드 내 순위 표시
-            self._leaderboard_load()
-            mode_entries = [e for e in self._leaderboard
-                            if e.get("mode", "practice") == self._current_mode]
-            mode_entries_sorted = sorted(mode_entries, key=lambda e: e.get("score", 0), reverse=True)
-            cur_score = data.get("total_score", 0)
-            rank = sum(1 for e in mode_entries_sorted if e.get("score", 0) > cur_score) + 1
-            total = len(mode_entries_sorted)
-            rank_col = (255, 220, 50) if rank == 1 else (0, 220, 200) if rank <= 3 else (180, 180, 220)
-            rank_txt = f"YOUR RANK:  #{rank}  of  {total}  [{mode_labels.get(self._current_mode,'')}]"
-            rank_surf = self._fonts["small_retro"].render(rank_txt, True, rank_col)
-            self._display.blit(rank_surf, rank_surf.get_rect(center=(w // 2, y + 6)))
+                if hits:
+                    y += 4
+                    hit_text = "  |  ".join(f"{k}: {v}" for k, v in hits.items())
+                    hit_surf = self._fonts["small_retro"].render(hit_text, True, (160, 160, 180))
+                    self._display.blit(hit_surf, hit_surf.get_rect(center=(w // 2, y)))
+                    y += item_gap
+
+                # 리더보드 내 순위 표시
+                self._leaderboard_load()
+                mode_entries = [e for e in self._leaderboard
+                                if e.get("mode", "practice") == self._current_mode]
+                mode_entries_sorted = sorted(mode_entries, key=lambda e: e.get("score", 0), reverse=True)
+                cur_score = data.get("total_score", 0)
+                rank = sum(1 for e in mode_entries_sorted if e.get("score", 0) > cur_score) + 1
+                total = len(mode_entries_sorted)
+                rank_col = (255, 220, 50) if rank == 1 else (0, 220, 200) if rank <= 3 else (180, 180, 220)
+                rank_txt = f"YOUR RANK:  #{rank}  of  {total}  [{mode_labels.get(self._current_mode,'')}]"
+                rank_surf = self._fonts["small_retro"].render(rank_txt, True, rank_col)
+                self._display.blit(rank_surf, rank_surf.get_rect(center=(w // 2, y + 6)))
 
         # 버튼: 다시하기 / 곡 선택 / 메뉴 (하단 고정, 중앙 정렬)
         mouse_pos = pygame.mouse.get_pos()
@@ -2764,8 +2797,9 @@ class GameEngine:
             pygame.mixer.music.pause()
         elif state == GameState.RESULT:
             self._result_data = self._scorer.get_final_result()
-            # 리더보드에 결과 저장
-            self._leaderboard_save_result()
+            # 리더보드에 결과 저장 (프리스타일은 저장 안 함)
+            if self._current_mode != "freestyle":
+                self._leaderboard_save_result()
         elif state == GameState.LEADERBOARD:
             self._leaderboard_load()
             self._generic_focus_idx = 0

@@ -1,11 +1,14 @@
 {
   "id": "kpop_basic",
-  "title": "K-POP basic",
+  "title": "국민체조",
   "artist": "Let's Dance",
-  "duration": 90,
+  "duration": 299,
   "bpm": 128,
-  "difficulty": 2,
+  "difficulty": 0,
   "mode": [
     "practice"
-  ]
+  ],
+  "video": "data/videos/gukmin_exercise_mediapipe_processed.mp4",
+  "video_fps": 24.0,
+  "source_npy": "data/videos/gukmin_exercise_mediapipe_processed_pose.npy"
 }
