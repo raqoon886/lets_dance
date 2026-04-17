@@ -40,6 +40,7 @@ scoring:
   similarity_metric: "cosine"  # cosine, euclidean, dtw
   score_scale: 100
   combo_multiplier: 1.5
+  baseline: 0.3               # 서 있는 자세의 기본 유사도 — raw sim에서 이 값을 빼고 0~100으로 리매핑
   grade_thresholds:
     perfect: 90
     great: 75
