@@ -5,8 +5,6 @@
   "duration": 211,
   "bpm": 134,
   "difficulty": 0,
-  "mode": [
-    "freestyle"
-  ],
+  "mode": ["freestyle"],
   "audio": "data/videos/freestyle_free.ogg"
 }

@@ -1,0 +1,11 @@
+{
+  "id": "smoke",
+  "title": "Smoke",
+  "duration": 209.6,
+  "difficulty": 0,
+  "mode": [
+    "freestyle"
+  ],
+  "audio": "data/videos/smoke.ogg",
+  "added_at": "2026-04-17 17:20:28"
+}
