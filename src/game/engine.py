@@ -2726,6 +2726,9 @@ class GameEngine:
 
         if state == GameState.MENU:
             self._menu_focus_idx = 0
+            # 게임 중 메뉴로 돌아오면 음악 정지
+            if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
+                pygame.mixer.music.stop()
             self._release_reference_assets()
         elif state == GameState.SONG_SELECT:
             self._selected_song_idx = 0
