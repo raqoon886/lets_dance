@@ -1158,7 +1158,7 @@ class GameEngine:
                 if self._current_mode == "challenge":
                     if text == "MISS":
                         self._consecutive_miss += 1
-                        if self._consecutive_miss >= 100:
+                        if self._consecutive_miss >= 10000000:
                             self._challenge_game_over = True
                     else:
                         self._consecutive_miss = 0
