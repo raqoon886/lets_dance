@@ -30,6 +30,8 @@ class AsyncCameraPose:
         self._lock = threading.Lock()
         self._raw_frame_lock = threading.Lock()
         self._latest_raw_frame = None
+        self._raw_frame_seq = 0          # 캡처 프레임 시퀀스 번호
+        self._infer_frame_seq = 0        # 추론 완료 프레임 시퀀스 번호
         
         self._running = False
         self._thread = None
@@ -56,6 +58,7 @@ class AsyncCameraPose:
                 # 캡처 직후 즉시 좌우 반전 처리 (UI 표시 및 추론용 통일)
                 frame = cv2.flip(frame, 1)
                 with self._raw_frame_lock:
+                    self._raw_frame_seq += 1
                     self._latest_raw_frame = frame
 
     def _update(self):
@@ -64,13 +67,13 @@ class AsyncCameraPose:
         last_processed_id = None
         while self._running:
             frame = None
+            cur_seq = 0
             with self._raw_frame_lock:
                 if self._latest_raw_frame is not None:
-                    # _latest_raw_frame을 None으로 비우면 UI 표출이 과거 프레임으로 튀는(덜덜 떨리는) 현상이 발생합니다.
-                    # UI를 위해 원본을 유지하되, 메모리 주소(id) 비교로 중복 추론만 방지합니다.
                     if id(self._latest_raw_frame) != last_processed_id:
                         frame = self._latest_raw_frame
                         last_processed_id = id(self._latest_raw_frame)
+                        cur_seq = self._raw_frame_seq
 
             
             if frame is None:
@@ -91,6 +94,7 @@ class AsyncCameraPose:
                 self._latest_frame = frame
                 self._latest_landmarks = landmarks
                 self._latest_detected = detected
+                self._infer_frame_seq = cur_seq
 
     def read(self):
         """
@@ -101,19 +105,27 @@ class AsyncCameraPose:
         # 💡 [극단적 지연 시간 소거 2] 강제 복사본 생성(copy) 제거
         # 이미 캡처 스레드에서 매번 새로운 배열이 할당되므로, 포인터만 던져줍니다. (3~5ms 즉시 단축)
         display_frame = None
+        display_seq = 0
         with self._raw_frame_lock:
             if self._latest_raw_frame is not None:
                 display_frame = self._latest_raw_frame
+                display_seq = self._raw_frame_seq
 
         with self._lock:
             landmarks = self._latest_landmarks
             detected = self._latest_detected
+            infer_seq = self._infer_frame_seq
             
             if display_frame is None and self._latest_frame is None:
                 return False, None, None, False
                 
             if display_frame is None:
                 display_frame = self._latest_frame
+                display_seq = infer_seq
+
+            lag = display_seq - infer_seq
+            if lag > 0:
+                print(f"\r[CAM] display=#{display_seq} infer=#{infer_seq} lag={lag}frames", end="")
 
             return True, display_frame, landmarks, detected
 
