@@ -18,7 +18,7 @@ def normalize_pose_landmarks(landmarks: np.ndarray, target_joints=None,
 
     arr = np.asarray(landmarks, dtype=np.float32)
     if arr.ndim != 2 or arr.shape[0] <= max(target_joints):
-        raise ValueError(
+        raise ValueError( 
             f"Expected landmarks shaped at least ({max(target_joints) + 1}, C), "
             f"got {arr.shape}"
         )
