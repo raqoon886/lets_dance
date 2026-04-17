@@ -87,6 +87,8 @@ class PoseDetector:
         if self._movenet is None:
             return {"landmarks": np.zeros((self.NUM_MP_LANDMARKS, 4), dtype=np.float32), "detected": False}
 
+        orig_h, orig_w = frame.shape[:2]
+
         input_image = tf.cast(
             tf.image.resize_with_pad(tf.expand_dims(frame, 0), 192, 192),
             dtype=tf.int32
@@ -96,10 +98,27 @@ class PoseDetector:
 
         detected = int(np.sum(keypoints[:, 2] > self.min_detection_confidence)) >= 5
 
+        # ── resize_with_pad 패딩 역변환 ───────────────────────────
+        # resize_with_pad 는 긴 쪽을 기준으로 스케일하고 짧은 쪽에 패딩을 넣음.
+        # MoveNet 좌표는 패딩 포함 정사각형(192×192) 기준으로 정규화되어 있으므로
+        # 원본 프레임 비율로 역변환하지 않으면 짧은 축 방향으로 오프셋이 생김.
+        # 예) 640×480: 상하 패딩 → Y 좌표가 아래로 밀림 (어깨가 가슴에 표시됨)
+        max_dim = max(orig_h, orig_w)
+        pad_y = (max_dim - orig_h) / (2.0 * max_dim)   # 정규화 패딩 크기
+        pad_x = (max_dim - orig_w) / (2.0 * max_dim)
+        scale_y = 1.0 - 2.0 * pad_y                    # orig_h / max_dim
+        scale_x = 1.0 - 2.0 * pad_x                    # orig_w / max_dim
+
         landmarks = np.zeros((self.NUM_MP_LANDMARKS, 4), dtype=np.float32)
         for mn_idx, mp_idx in MOVENET_TO_MP.items():
-            y, x, conf = keypoints[mn_idx]
-            landmarks[mp_idx] = [x, y, 0.0, conf]
+            y_pad, x_pad, conf = keypoints[mn_idx]
+            # 패딩된 정사각형 좌표 → 원본 프레임 정규화 좌표
+            x_orig = (x_pad - pad_x) / scale_x if scale_x > 0 else x_pad
+            y_orig = (y_pad - pad_y) / scale_y if scale_y > 0 else y_pad
+            # 프레임 밖 패딩 영역에 찍힌 좌표는 클리핑
+            x_orig = float(np.clip(x_orig, 0.0, 1.0))
+            y_orig = float(np.clip(y_orig, 0.0, 1.0))
+            landmarks[mp_idx] = [x_orig, y_orig, 0.0, conf]
 
         return {"landmarks": landmarks, "detected": detected}
 
