@@ -1517,12 +1517,13 @@ class GameEngine:
 
                 # 곡 정보
                 diff  = DIFF_STARS.get(song.get("difficulty", 0), "")
-                dur   = int(round(song.get('duration', 0)))
+                dur_raw = int(round(song.get('duration', 0)))
+                dur_str = f"{dur_raw // 60}m {dur_raw % 60}s" if dur_raw >= 60 else f"{dur_raw}s"
                 mode_list = song.get('mode', [])
                 if 'practice' in mode_list or 'freestyle' in mode_list:
-                    info = f"BPM {song.get('bpm',0)}  ·  {dur}s"
+                    info = dur_str
                 else:
-                    info = f"BPM {song.get('bpm',0)}  ·  {dur}s  ·  {diff}"
+                    info = f"BPM {song.get('bpm',0)}  ·  {dur_str}  ·  {diff}"
                 info_col = self._neon_color(mode_col, tick, 0.7) if selected else (130, 125, 160)
                 i_surf = self._fonts["small_retro"].render(info, True, info_col)
                 self._display.blit(i_surf, (rect.x + 14, rect.y + card_h - 22))
@@ -1549,13 +1550,16 @@ class GameEngine:
                                            size=18, width=2)
 
                 # 상세 정보
+                sel_dur = int(round(sel.get('duration', 0)))
+                sel_dur_str = f"{sel_dur // 60}m {sel_dur % 60}s" if sel_dur >= 60 else f"{sel_dur}s"
+                sel_modes = sel.get('mode', [])
                 detail_items = [
                     ("TITLE",    sel.get("title", "-")),
                     ("ARTIST",   sel.get("artist", "-")),
-                    ("BPM",      str(sel.get("bpm", 0))),
-                    ("LENGTH",   f"{int(round(sel.get('duration', 0)))}s"),
                 ]
-                sel_modes = sel.get('mode', [])
+                if 'practice' not in sel_modes and 'freestyle' not in sel_modes:
+                    detail_items.append(("BPM", str(sel.get("bpm", 0))))
+                detail_items.append(("LENGTH", sel_dur_str))
                 if 'practice' not in sel_modes and 'freestyle' not in sel_modes:
                     detail_items.append(
                         ("LEVEL",    DIFF_STARS.get(sel.get("difficulty", 0), "-")))
@@ -1650,6 +1654,7 @@ class GameEngine:
         song_title = song.get("title", "")
         bpm_val    = song.get("bpm", 0)
         dur_val    = int(round(song.get("duration", 0)))
+        dur_str_r  = f"{dur_val // 60}m {dur_val % 60}s" if dur_val >= 60 else f"{dur_val}s"
         diff_map   = {0:"FREE",1:"★☆☆☆☆",2:"★★☆☆☆",3:"★★★☆☆",4:"★★★★☆",5:"★★★★★"}
         diff_lbl   = diff_map.get(song.get("difficulty", 0), "")
         mode_color = {"practice":(0,220,180),"challenge":(255,190,0),"freestyle":(200,100,255)}
@@ -1660,9 +1665,9 @@ class GameEngine:
         # BPM / 길이 / 난이도 (오른쪽 상단)
         if bpm_val or dur_val:
             if self._current_mode in ("practice", "freestyle"):
-                info_str = f"BPM {bpm_val}  |  {dur_val}s"
+                info_str = dur_str_r
             else:
-                info_str = f"BPM {bpm_val}  |  {dur_val}s  |  {diff_lbl}"
+                info_str = f"BPM {bpm_val}  |  {dur_str_r}  |  {diff_lbl}"
             info_surf = self._fonts["small_retro"].render(info_str, True, self._neon_color(mcol, self._neon_tick, 0.8))
             self._display.blit(info_surf, info_surf.get_rect(midright=(w - 12, HEADER_H // 2)))
 

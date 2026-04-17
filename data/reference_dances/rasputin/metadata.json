@@ -1,0 +1,12 @@
+{
+  "id": "rasputin",
+  "title": "Rasputin",
+  "artist": "Boney M.",
+  "duration": 105,
+  "bpm": 128,
+  "difficulty": 4,
+  "mode": ["challenge"],
+  "video": "data/videos/rasputin_mediapipe_processed.mp4",
+  "video_fps": 30.0,
+  "source_npy": "data/videos/rasputin_mediapipe_processed_pose.npy"
+}
