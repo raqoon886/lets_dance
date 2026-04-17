@@ -3090,6 +3090,22 @@ class GameEngine:
                 else:
                     print(f"[WARN] 레퍼런스 영상 찾을 수 없음: {video_path}")
 
+            # 영상 없이 오디오만 있는 경우 (프리스타일 음악 전용)
+            if not video_rel or not os.path.exists(video_path if video_rel else ""):
+                audio_rel = self._current_song.get("audio", "")
+                if audio_rel:
+                    project_root = os.path.dirname(os.path.dirname(
+                        os.path.dirname(os.path.abspath(__file__))))
+                    audio_path = os.path.join(project_root, audio_rel)
+                    if not os.path.exists(audio_path):
+                        audio_path = os.path.join(os.getcwd(), audio_rel)
+                    if os.path.exists(audio_path):
+                        self._audio_path = audio_path
+                        try:
+                            pygame.mixer.music.load(audio_path)
+                        except Exception:
+                            pass
+
     def shutdown(self):
         """Clean up all resources. 중복 호출에도 안전합니다."""
         if getattr(self, '_shutdown_done', False):
