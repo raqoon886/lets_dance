@@ -1,23 +1,23 @@
 # Core dependencies
-mediapipe>=0.10.0
-opencv-contrib-python>=4.10.0
-numpy>=1.24.0,<2.0.0
+mediapipe==0.10.18
+opencv-contrib-python==4.10.0.84
+numpy==1.26.4
 
 # MoveNet pose detection
-tensorflow>=2.15.0
-tensorflow-hub>=0.16.0
+tensorflow==2.15.0
+tensorflow-hub==0.16.1
 
 # Scratch TFLite scoring (Raspberry Pi runtime)
-tflite-runtime>=2.15.0
+tflite-runtime==2.15.0.post1
 
 # Preprocessing
-yt-dlp>=2024.0.0
+yt-dlp==2026.3.17
 
 # Game UI
-pygame>=2.5.0
+pygame==2.6.1
 
 # Configuration
-pyyaml>=6.0
+PyYAML==6.0.3
 
 # Scoring utilities
-scipy>=1.10.0
+scipy==1.17.1
