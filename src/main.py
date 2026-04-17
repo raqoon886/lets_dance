@@ -36,8 +36,8 @@ def main():
     """Application entry point."""
     parser = argparse.ArgumentParser(description="Let's Dance!")
     parser.add_argument("--model", "-m", choices=["movenet", "mediapipe"],
-                        default="mediapipe",
-                        help="포즈 추출 모델 선택 (기본: mediapipe)")
+                        default="movenet",
+                        help="실시간 포즈 추출 모델 선택 (기본: movenet)")
     parser.add_argument("--compare", "-c", type=str, default=None,
                         metavar="NPY_PATH",
                         help="레퍼런스 .npy 파일과 실시간 비교 모드 실행")
