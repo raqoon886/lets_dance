@@ -14,7 +14,7 @@ pose:
 
 embedding:
   model_dir: "data/models/embedding"
-  model_name: "embedding_gcn_e64_triplet"
+  model_name: "stgcnpp_dance_e64"
   model_path: ""              # optional direct .tflite path; empty uses registry/model_name
   use_reference_cache: true
   reference_cache_dir: "data/cache/reference_embeddings"
