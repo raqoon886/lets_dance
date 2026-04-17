@@ -58,13 +58,17 @@ class AsyncCameraPose:
     def _update(self):
         """Continuous background loop for inferencing."""
         import time
+        last_processed_id = None
         while self._running:
             frame = None
             with self._raw_frame_lock:
                 if self._latest_raw_frame is not None:
-                    frame = self._latest_raw_frame
-                    # 처리할 프레임 가져온 후 소비
-                    self._latest_raw_frame = None
+                    # _latest_raw_frame을 None으로 비우면 UI 표출이 과거 프레임으로 튀는(덜덜 떨리는) 현상이 발생합니다.
+                    # UI를 위해 원본을 유지하되, 메모리 주소(id) 비교로 중복 추론만 방지합니다.
+                    if id(self._latest_raw_frame) != last_processed_id:
+                        frame = self._latest_raw_frame
+                        last_processed_id = id(self._latest_raw_frame)
+
             
             if frame is None:
                 time.sleep(0.005)
