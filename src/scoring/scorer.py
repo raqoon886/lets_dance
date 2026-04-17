@@ -12,15 +12,25 @@ class DanceScorer:
     GRADES = ["Perfect", "Great", "Good", "OK", "Miss"]
 
     def __init__(self, score_scale=100, combo_multiplier=1.5,
-                 grade_thresholds=None):
+                 grade_thresholds=None, baseline=0.0):
         self.score_scale = score_scale
         self.combo_multiplier = combo_multiplier
+        # baseline 보정: raw similarity에서 baseline을 빼고 유효 범위를 0~1로 리매핑
+        # 예) baseline=0.65이면 raw 0.65→0, raw 1.0→1.0, raw 0.82→0.49
+        self.baseline = float(baseline)
         self.grade_thresholds = grade_thresholds or {
             "perfect": 90,
             "great": 75,
             "good": 60,
             "ok": 40,
         }
+        # 콤보 티어: (최소콤보, 배율)
+        self.combo_tiers = [
+            (40, 1.5),
+            (20, 1.3),
+            (10, 1.2),
+            (5,  1.1),
+        ]
         self._total_score = 0
         self._combo_count = 0
         self._max_combo = 0
@@ -51,20 +61,31 @@ class DanceScorer:
         # 3. Apply combo multiplier
         # 4. Update combo streak
         # 5. Track hit counts
-        score_100 = similarity * self.score_scale
+        # baseline 보정 후 0~100 스케일로 변환
+        if self.baseline > 0:
+            adjusted = (similarity - self.baseline) / (1.0 - self.baseline)
+            adjusted = max(0.0, min(1.0, adjusted))
+        else:
+            adjusted = max(0.0, min(1.0, similarity))
+        score_100 = adjusted * self.score_scale
         grade = self._get_grade(score_100)
 
-        # 콤보: Good 이상만 증가, OK는 유지(증가도 리셋도 안 함), Miss만 리셋
-        if grade in ("Perfect", "Great", "Good"):
+        # 콤보: Perfect만 증가, Miss만 리셋, 나머지(Great/Good/OK)는 유지
+        if grade == "Perfect":
             self._combo_count += 1
         elif grade == "Miss":
             self._combo_count = 0
-        # OK: combo 유지 (변경 없음)
+        # Great / Good / OK: combo 유지 (변경 없음)
 
         self._max_combo = max(self._max_combo, self._combo_count)
 
-        combo_bonus = 1.0 + (self._combo_count * 0.1)
-        points = score_100 * min(combo_bonus, self.combo_multiplier)
+        # 티어 기반 콤보 보너스
+        combo_bonus = 1.0
+        for tier_min, tier_mult in self.combo_tiers:
+            if self._combo_count >= tier_min:
+                combo_bonus = tier_mult
+                break
+        points = score_100 * combo_bonus
         self._total_score += points
         self._hit_counts[grade] += 1
         self._history.append(score_100)

@@ -183,7 +183,7 @@ class GameEngine:
         from scoring.feedback import FeedbackGenerator
         self._scorer = DanceScorer(
             **{k: v for k, v in self.config.get("scoring", {}).items()
-               if k in ("score_scale", "combo_multiplier", "grade_thresholds")}
+               if k in ("score_scale", "combo_multiplier", "grade_thresholds", "baseline")}
         )
         self._feedback_gen = FeedbackGenerator()
 
