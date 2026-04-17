@@ -31,3 +31,8 @@ logs/
 # videos
 assets/videos/
 fps_check/recorded.avi
+
+# Data collection
+data_collection/videos/
+data_collection/cropped/
+data_collection/visualize/
