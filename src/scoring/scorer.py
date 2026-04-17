@@ -54,10 +54,12 @@ class DanceScorer:
         score_100 = similarity * self.score_scale
         grade = self._get_grade(score_100)
 
-        if grade != "Miss":
+        # 콤보: Good 이상만 증가, OK는 유지(증가도 리셋도 안 함), Miss만 리셋
+        if grade in ("Perfect", "Great", "Good"):
             self._combo_count += 1
-        else:
+        elif grade == "Miss":
             self._combo_count = 0
+        # OK: combo 유지 (변경 없음)
 
         self._max_combo = max(self._max_combo, self._combo_count)
 

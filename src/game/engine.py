@@ -101,6 +101,9 @@ class GameEngine:
         self._ref_video_pos: tuple = (0, 0)   # 패널 내 배치 좌표
         # 피드백 이펙트 페이드 타이머 (초)
         self._feedback_timer: float = 0.0
+        # 점수 판정 주기 제어 — 15프레임(0.5초)마다 판정
+        self._scoring_interval: int = 15     # 판정 간격 (프레임 수)
+        self._scoring_frame_counter: int = 0 # 마지막 판정 후 경과 프레임
         # 실루엣 렌더러 (사람 형태 캐릭터)
         self._user_silhouette = None
         self._guide_silhouette = None
@@ -1101,52 +1104,65 @@ class GameEngine:
 
         # Score based on pose similarity. scoring_landmarks may be a held pose
         # for a few frames when MediaPipe briefly drops detection.
+        #
+        # 판정 주기 분리:
+        #   매 프레임: buffer_frame()으로 포즈 버퍼 축적
+        #   N프레임마다: compute_from_buffer()로 모델 추론 + 점수 산출
         sim = None
         if self._current_mode == "freestyle":
             pass  # 프리스타일: 채점 없음
         elif scoring_landmarks is not None:
-            if self._ref_frame_landmarks is not None:
-                if self._score_method == "direct":
-                    sim = self._direct_window_similarity(
-                        scoring_landmarks,
-                        method=self._similarity_method,
-                        debug=True,
-                    )
-                elif self._score_method == "scratch":
-                    tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
-                    sim = self._scratch_comparator.compute(
-                        scoring_landmarks,
-                        self._ref_landmarks,
-                        self._ref_current_idx,
-                        tolerance_frames=tolerance_frames,
-                    )
-                    if sim is None and self._model_warmup_direct_fallback:
+            # ── 매 프레임: 버퍼 축적 ──
+            if self._score_method == "scratch" and hasattr(self, '_scratch_comparator') and self._scratch_comparator:
+                self._scratch_comparator.buffer_frame(scoring_landmarks)
+            elif self._score_method == "embedding" and hasattr(self, '_embedding_comparator') and self._embedding_comparator:
+                self._embedding_comparator.buffer_frame(scoring_landmarks)
+
+            # ── 판정 주기 도달 시: 유사도 계산 ──
+            self._scoring_frame_counter += 1
+            if self._scoring_frame_counter >= self._scoring_interval:
+                self._scoring_frame_counter = 0
+
+                if self._ref_frame_landmarks is not None:
+                    if self._score_method == "direct":
                         sim = self._direct_window_similarity(
                             scoring_landmarks,
-                            method=self._fallback_similarity_method,
+                            method=self._similarity_method,
+                            debug=True,
                         )
-                else:
-                    tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
-                    sim = self._embedding_comparator.compute(
-                        scoring_landmarks,
-                        self._ref_landmarks,
-                        self._ref_current_idx,
-                        tolerance_frames=tolerance_frames,
-                    )
-                    if sim is None and self._model_warmup_direct_fallback:
-                        sim = self._direct_window_similarity(
-                            scoring_landmarks,
-                            method=self._fallback_similarity_method,
+                    elif self._score_method == "scratch":
+                        tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
+                        sim = self._scratch_comparator.compute_from_buffer(
+                            self._ref_landmarks,
+                            self._ref_current_idx,
+                            tolerance_frames=tolerance_frames,
                         )
-            else:
-                if self._score_method in ("scratch", "embedding"):
-                    if not self._warned_scratch_no_ref:
-                        print(f"[WARN] {self._score_method} scoring requires reference.npy; scoring paused.")
-                        self._warned_scratch_no_ref = True
+                        if sim is None and self._model_warmup_direct_fallback:
+                            sim = self._direct_window_similarity(
+                                scoring_landmarks,
+                                method=self._fallback_similarity_method,
+                            )
+                    else:
+                        tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
+                        sim = self._embedding_comparator.compute_from_buffer(
+                            self._ref_landmarks,
+                            self._ref_current_idx,
+                            tolerance_frames=tolerance_frames,
+                        )
+                        if sim is None and self._model_warmup_direct_fallback:
+                            sim = self._direct_window_similarity(
+                                scoring_landmarks,
+                                method=self._fallback_similarity_method,
+                            )
                 else:
-                    visibility = scoring_landmarks[:, 3]
-                    visible = visibility[visibility > 0]
-                    sim = min(float(np.mean(visible)), 1.0) if len(visible) else 0.0
+                    if self._score_method in ("scratch", "embedding"):
+                        if not self._warned_scratch_no_ref:
+                            print(f"[WARN] {self._score_method} scoring requires reference.npy; scoring paused.")
+                            self._warned_scratch_no_ref = True
+                    else:
+                        visibility = scoring_landmarks[:, 3]
+                        visible = visibility[visibility > 0]
+                        sim = min(float(np.mean(visible)), 1.0) if len(visible) else 0.0
 
         if sim is not None:
             evaluation = self._scorer.evaluate(sim)
@@ -2259,8 +2275,8 @@ class GameEngine:
 
         self._display.blit(base_surf, (tx, ty))
 
-        # +점수
-        if pts > 0 and alpha > 30:
+        # +점수 (0점이라도 표시)
+        if pts >= 0 and alpha > 30:
             pts_surf = self._fonts["feedback"].render(f"+{pts}", True, (255, 240, 80))
             pts_surf = pygame.transform.scale(pts_surf,
                 (max(1, int(pts_surf.get_width() * 0.6)),

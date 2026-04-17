@@ -85,15 +85,42 @@ class ScratchPoseSimilarity:
 
     def compute(self, user_landmarks: np.ndarray, reference_sequence: np.ndarray,
                 reference_index: int, tolerance_frames: int = 0):
-        """Return a finite similarity in [0, 1], or None until a full window exists."""
+        """Return a finite similarity in [0, 1], or None until a full window exists.
+
+        This method combines buffer_frame() + compute_from_buffer() for
+        backward compatibility.  New callers should prefer the split API.
+        """
         if user_landmarks is None or reference_sequence is None:
             return None
 
+        self.buffer_frame(user_landmarks)
+        return self.compute_from_buffer(reference_sequence, reference_index,
+                                        tolerance_frames=tolerance_frames)
+
+    # ── split API: buffer accumulation vs. inference ──────────────
+
+    def buffer_frame(self, user_landmarks: np.ndarray):
+        """Normalize and append one frame to the rolling user window.
+
+        Call this every frame to keep the sliding window up-to-date,
+        even when inference is not needed.
+        """
+        if user_landmarks is None:
+            return
         self._user_buffer.append(normalize_pose_landmarks(
             user_landmarks,
             target_joints=self.target_joints,
             feature_dims=self.feature_dims,
         ))
+
+    def compute_from_buffer(self, reference_sequence: np.ndarray,
+                            reference_index: int, tolerance_frames: int = 0):
+        """Run model inference on the current buffer and return similarity.
+
+        Returns None if the buffer is not yet full (< sequence_length frames).
+        """
+        if reference_sequence is None:
+            return None
         if len(self._user_buffer) < self.sequence_length:
             return None
 
