@@ -530,6 +530,15 @@ class GameEngine:
                     meta = json.load(f)
                 meta["path"]          = os.path.join(base, song_dir)
                 meta["has_reference"] = os.path.exists(ref_path)
+                # 앨범 커버 로드 (cover.png)
+                cover_path = os.path.join(base, song_dir, "cover.png")
+                if os.path.exists(cover_path):
+                    try:
+                        meta["_cover_surf"] = pygame.image.load(cover_path).convert_alpha()
+                    except Exception:
+                        meta["_cover_surf"] = None
+                else:
+                    meta["_cover_surf"] = None
                 songs.append(meta)
             except Exception as e:
                 print(f"[WARN] 곡 로드 실패 {song_dir}: {e}")
@@ -1548,6 +1557,25 @@ class GameEngine:
                 self._draw_corner_brackets(self._display, panel,
                                            self._neon_color(mode_col, tick * 1.5),
                                            size=18, width=2)
+
+                # 앨범 커버 표시 (정사각형, 패널 오른쪽 상단)
+                cover_surf = sel.get("_cover_surf")
+                cover_size = min(pw * 3 // 4, 240)
+                cover_margin = 12
+                has_cover = cover_surf is not None
+                if has_cover:
+                    cover_x = panel.right - cover_size - cover_margin
+                    cover_y = panel.y + cover_margin
+                    scaled = pygame.transform.smoothscale(cover_surf, (cover_size, cover_size))
+                    self._display.blit(scaled, (cover_x, cover_y))
+                    # 커버 테두리
+                    cover_rect = pygame.Rect(cover_x, cover_y, cover_size, cover_size)
+                    pygame.draw.rect(self._display, self._neon_color(mode_col, tick, 0.5),
+                                     cover_rect, 2, border_radius=6)
+                    # 정보 영역은 커버 왼쪽까지만
+                    info_right = cover_x - 8
+                else:
+                    info_right = panel.right - 16
 
                 # 상세 정보
                 sel_dur = int(round(sel.get('duration', 0)))
