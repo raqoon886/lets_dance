@@ -11,7 +11,6 @@ tensorflow-hub>=0.16.0
 tflite-runtime>=2.15.0
 
 # Preprocessing
-rembg>=2.0.0
 yt-dlp>=2024.0.0
 
 # Game UI
