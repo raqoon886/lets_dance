@@ -1154,14 +1154,14 @@ class GameEngine:
                 self._feedback_timer = 1.2  # 1.2초 동안 표시
                 self._feedback_age   = 0.0  # 애니메이션 경과 시간 리셋
                 text = fb.get("text", "")
-                # ── 챌린지 모드 연속 MISS 카운터 ──────────────
-                if self._current_mode == "challenge":
-                    if text == "MISS":
-                        self._consecutive_miss += 1
-                        if self._consecutive_miss >= 100:
-                            self._challenge_game_over = True
-                    else:
-                        self._consecutive_miss = 0
+                # ── 챌린지 모드 연속 MISS 카운터 (비활성화 - 테스트 원활화) ──────────────
+                # if self._current_mode == "challenge":
+                #     if text == "MISS":
+                #         self._consecutive_miss += 1
+                #         if self._consecutive_miss >= 100:
+                #             self._challenge_game_over = True
+                #     else:
+                #         self._consecutive_miss = 0
                 # 파티클 폭발 효과 — fb["text"]로 등급 판단
                 particle_map = {"PERFECT!": 60, "GREAT!": 40, "GOOD": 25}
                 particle_count = particle_map.get(text, 0)
@@ -2081,17 +2081,11 @@ class GameEngine:
             f"[{mode_label}]  {song_title}", True, mode_col_ft)
         self._display.blit(footer_left, (14, ROW1_Y))
 
-        if self._current_mode == "challenge" and self._consecutive_miss > 0:
-            miss_left = 10 - self._consecutive_miss
-            warn_col  = (255, 80, 80) if miss_left <= 3 else (255, 180, 0)
-            warn_txt  = self._fonts["small_retro"].render(
-                f"MISS x{self._consecutive_miss}  ({miss_left} LEFT!)", True, warn_col)
-            self._display.blit(warn_txt, warn_txt.get_rect(midright=(w - 14, ROW1_Y + 8)))
-        else:
-            footer_right = self._fonts["small_retro"].render(
-                "P: PAUSE  |  ESC: MENU", True, (80, 80, 110))
-            self._display.blit(footer_right,
-                               footer_right.get_rect(midright=(w - 10, ROW1_Y + 8)))
+        # (MISS 카운터 UI 삭제됨)
+        footer_right = self._fonts["small_retro"].render(
+            "P: PAUSE  |  ESC: MENU", True, (80, 80, 110))
+        self._display.blit(footer_right,
+                           footer_right.get_rect(midright=(w - 10, ROW1_Y + 8)))
 
         # 2행: 진행 바 + 남은 시간
         ROW2_Y = fy + FOOTER_H // 2 + 4
