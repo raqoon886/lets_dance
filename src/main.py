@@ -7,6 +7,9 @@ import sys
 import os
 import argparse
 
+# SDL이 SIGINT/SIGTERM을 가로채지 않도록 pygame import 전에 설정
+os.environ["SDL_NO_SIGNAL_HANDLERS"] = "1"
+
 # Add src to Python path so modules can be imported
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

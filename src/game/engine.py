@@ -5,6 +5,12 @@ Game Engine - Main game loop, state management, and component orchestration.
 import time
 import sys
 import os
+import json
+import signal
+import subprocess
+
+import pygame
+import cv2
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -123,8 +129,8 @@ class GameEngine:
         Initialize all game subsystems.
         Called once at startup.
         """
-        import pygame
-        import cv2
+        # SDL이 SIGINT/SIGTERM을 가로채지 않도록 pygame.init() 전에 설정
+        os.environ.setdefault("SDL_NO_SIGNAL_HANDLERS", "1")
 
         pygame.init()
         # 기본 버퍼(4096)는 ~100ms의 레이턴시를 유발하여 영상이 소리에 비해 먼저 나오는 느낌을 줍니다.
@@ -286,7 +292,6 @@ class GameEngine:
         - 한글 포함 텍스트: NotoSansKR.ttf (한글 지원)
         두 폰트 모두 assets/fonts/ 에 번들로 포함.
         """
-        import os
 
         try:
             engine_dir   = os.path.dirname(os.path.abspath(__file__))
@@ -377,7 +382,6 @@ class GameEngine:
         import threading, sys, os as _os, termios, select
 
         def _post(key):
-            import pygame
             try:
                 pygame.event.post(pygame.event.Event(
                     pygame.KEYDOWN, key=key, mod=0, unicode='', scancode=0))
@@ -394,6 +398,7 @@ class GameEngine:
             b'd':     'K_RIGHT', b'D': 'K_RIGHT',
             b'p':     'K_p',     b'P': 'K_p',
             b'q':     'K_q',     b'Q': 'K_q',
+            b'\x03':  'K_q',     # Ctrl+C → 게임 종료
         }
         LINE_MAP = {
             '':       'K_RETURN',
@@ -407,7 +412,6 @@ class GameEngine:
         }
 
         def _read_keys():
-            import pygame
             fd = sys.stdin.fileno()
 
             # ── raw 모드 시도 ──────────────────────────────────────
@@ -482,7 +486,6 @@ class GameEngine:
 
     def _load_songs(self) -> list:
         """data/reference_dances/ 폴더를 스캔해 곡 목록을 반환합니다."""
-        import os, json
 
         # 경로 탐색 우선순위:
         #   1) engine.py 기준 3단계 위 (src/game → src → project)
@@ -559,39 +562,38 @@ class GameEngine:
         Main game loop.
         Handles: input -> update -> render cycle at TARGET_FPS.
         """
-        import signal
-
-        def _signal_handler(sig, frame):
-            print("\n[INFO] 시그널 수신 — 게임을 종료합니다.")
+        # SIGTERM 핸들러만 유지 (SIGINT는 Python이 KeyboardInterrupt로 변환하므로 제거)
+        def _sigterm_handler(sig, frame):
+            print("\n[INFO] SIGTERM — 게임을 종료합니다.")
             self.running = False
-            # pygame 이벤트 루프가 차단 상태일 수 있으므로 QUIT 이벤트도 함께 포스트
-            try:
-                import pygame as _pg
-                _pg.event.post(_pg.event.Event(_pg.QUIT))
-            except Exception:
-                pass
 
-        signal.signal(signal.SIGINT,  _signal_handler)
-        signal.signal(signal.SIGTERM, _signal_handler)
+        signal.signal(signal.SIGTERM, _sigterm_handler)
+        # SIGINT는 Python 기본 동작(KeyboardInterrupt 발생)으로 복원
+        signal.signal(signal.SIGINT, signal.default_int_handler)
 
         self.running = True
+        _frame_duration = 1.0 / self.TARGET_FPS
 
-        while self.running:
-            # 1. Handle input events
-            self._handle_input()
-
-            # 2. Update game state
-            self._update()
-
-            # 3. Render frame
-            self._render()
-
-            # 4. Frame rate control
-            self._clock.tick(self.TARGET_FPS)
+        try:
+            while self.running:
+                _t0 = time.perf_counter()
+                self._handle_input()
+                self._update()
+                self._render()
+                # pygame.clock.tick() 은 내부적으로 SDL_Delay(C레벨 블로킹)를 사용하므로
+                # Python 시그널(KeyboardInterrupt)이 전달되지 않음.
+                # time.sleep() 은 GIL을 해제하여 SIGINT → KeyboardInterrupt 즉시 처리.
+                _elapsed = time.perf_counter() - _t0
+                _sleep = _frame_duration - _elapsed
+                if _sleep > 0:
+                    time.sleep(_sleep)
+        except KeyboardInterrupt:
+            print("\n[INFO] Ctrl+C — 게임을 종료합니다.")
+        finally:
+            self.shutdown()
 
     def _handle_input(self):
         """Process user input events (keyboard, mouse, touch)."""
-        import pygame
 
         # ── 화면별 포커스 버튼 목록 정의 ──────────────────────────────
         FOCUS_LISTS = {
@@ -700,6 +702,12 @@ class GameEngine:
                 # Q → 종료
                 elif event.key == pygame.K_q:
                     self.running = False
+
+                # Ctrl+C → 즉시 종료 (pygame 창이 키보드를 가져가므로 여기서 처리)
+                elif event.key == pygame.K_c and (event.mod & pygame.KMOD_CTRL):
+                    print("\n[INFO] Ctrl+C — 게임을 종료합니다.")
+                    self.running = False
+                    return
 
                 # S → 스크린샷
                 elif event.key == pygame.K_s:
@@ -916,10 +924,10 @@ class GameEngine:
             self.transition_to(GameState.MENU)
         elif btn_name == "btn_settings_vol_down":
             self._bgm_volume = max(0.0, round(self._bgm_volume - 0.1, 1))
-            import pygame; pygame.mixer.music.set_volume(self._bgm_volume)
+            pygame.mixer.music.set_volume(self._bgm_volume)
         elif btn_name == "btn_settings_vol_up":
             self._bgm_volume = min(1.0, round(self._bgm_volume + 0.1, 1))
-            import pygame; pygame.mixer.music.set_volume(self._bgm_volume)
+            pygame.mixer.music.set_volume(self._bgm_volume)
         elif btn_name == "btn_countdown_cancel":
             self.transition_to(GameState.MENU)
         elif btn_name == "btn_ready_skip":
@@ -1045,7 +1053,6 @@ class GameEngine:
 
     def _update_gameplay(self):
         """Fetch async frame and compute score."""
-        import cv2
         import numpy as np
 
         if getattr(self, '_async_camera', None) is None:
@@ -1088,7 +1095,6 @@ class GameEngine:
             vframe_rgb = self._async_video_player.get_latest_frame()
             if vframe_rgb is not None:
                 th, tw = vframe_rgb.shape[:2]
-                import pygame
                 self._ref_video_surf = pygame.image.frombuffer(vframe_rgb.tobytes(), (tw, th), "RGB")
             else:
                 self._ref_video_surf = None
@@ -1184,7 +1190,6 @@ class GameEngine:
 
     def _render(self):
         """Render current frame to display."""
-        import pygame
 
         # 매 프레임 버튼 rect 초기화 (현재 화면의 버튼만 등록)
         self._btn_rects.clear()
@@ -1215,7 +1220,6 @@ class GameEngine:
 
     def _render_menu(self, w, h):
         """Render the main menu — retro-fancy neon style."""
-        import pygame
         import math
 
         tick = self._neon_tick
@@ -1398,7 +1402,6 @@ class GameEngine:
 
     def _render_song_select(self, w, h):
         """곡 선택 화면 — retro-fancy neon style."""
-        import pygame
         import math
 
         tick = self._neon_tick
@@ -1605,8 +1608,6 @@ class GameEngine:
 
     def _render_ready(self, w, h):
         """준비 화면: 좌=웹캠, 우=스켈레톤 + 전신 감지 안내 + OK 사인 대기."""
-        import pygame
-        import cv2
 
         MID_X = w // 2
         HEADER_H = 48
@@ -1753,7 +1754,6 @@ class GameEngine:
 
     def _render_countdown(self, w, h):
         """Render countdown screen."""
-        import pygame
 
         self._display.fill((10, 5, 30))
 
@@ -1796,7 +1796,6 @@ class GameEngine:
     @staticmethod
     def _draw_neon_rect(surface, rect, color, width=2, radius=14, glow_radius=8):
         """네온 글로우 효과가 있는 둥근 사각형을 그립니다."""
-        import pygame
         # 글로우 레이어 (바깥쪽부터 안쪽으로 점점 밝게)
         for i in range(glow_radius, 0, -1):
             alpha = int(80 * (1 - i / glow_radius))
@@ -1813,7 +1812,6 @@ class GameEngine:
     @staticmethod
     def _draw_corner_brackets(surface, rect, color, size=14, width=3):
         """선택된 항목의 네 모서리에 대괄호 형태의 하이라이트를 그립니다."""
-        import pygame
         x, y, w, h = rect.x, rect.y, rect.width, rect.height
         corners = [
             # (시작점, 수평 끝, 수직 끝)
@@ -1840,7 +1838,6 @@ class GameEngine:
             line_color: 뼈대 선 색상
             joint_color: 관절 점 색상
         """
-        import pygame
         import numpy as np
         from pose.landmark_utils import SKELETON_CONNECTIONS, DANCE_JOINTS
 
@@ -1907,8 +1904,6 @@ class GameEngine:
         HEADER: 점수/콤보/시간/버튼
         FOOTER: 곡 정보/조작 안내
         """
-        import pygame
-        import cv2
         import numpy as np
         import math
 
@@ -2121,7 +2116,6 @@ class GameEngine:
 
     def _update_and_draw_particles(self):
         """파티클 업데이트 + 화면 그리기."""
-        import pygame
         import math
 
         alive = []
@@ -2169,7 +2163,6 @@ class GameEngine:
         _feedback_timer : 남은 표시 시간 (1.2→0, 매 프레임 리셋될 수 있음)
         _feedback_age   : 등장 후 경과 시간 (0→..., 리셋 시 0으로 초기화)
         """
-        import pygame
 
         fb    = self._last_feedback
         timer = self._feedback_timer   # 남은 시간 — alpha fade-out에 사용
@@ -2254,7 +2247,6 @@ class GameEngine:
 
     def _render_pause_overlay(self, w, h):
         """게임플레이 위에 반투명 일시정지 오버레이를 렌더링합니다."""
-        import pygame
 
         # 반투명 어두운 오버레이
         overlay = pygame.Surface((w, h), pygame.SRCALPHA)
@@ -2289,7 +2281,6 @@ class GameEngine:
 
     def _render_result(self, w, h):
         """Render result screen."""
-        import pygame
 
         tick = self._neon_tick
 
@@ -2416,7 +2407,6 @@ class GameEngine:
 
     def _render_leaderboard(self, w, h):
         """리더보드 화면 렌더링."""
-        import pygame
 
         tick = self._neon_tick
 
@@ -2541,7 +2531,6 @@ class GameEngine:
 
     def _render_settings(self, w, h):
         """Render settings screen — 볼륨 슬라이더 + 설정 정보."""
-        import pygame
 
         tick = self._neon_tick
         for y_i in range(h):
@@ -2712,14 +2701,12 @@ class GameEngine:
             # PAUSED→PLAYING 복귀인 경우에만 세션 유지
             resuming_from_pause = getattr(self, '_prev_state', None) == GameState.PAUSED
             if resuming_from_pause:
-                import pygame
                 pygame.mixer.music.unpause()
             else:
                 # 새 게임 시작: 이전 세션 완전 정리
                 if self._current_session is not None:
                     self._current_session.is_active = False
                     self._current_session = None
-                import pygame
                 pygame.mixer.music.stop()
                 self._scorer.reset()
                 self._last_feedback = None
@@ -2758,7 +2745,6 @@ class GameEngine:
                     
                 if getattr(self, '_audio_path', None) and os.path.exists(self._audio_path):
                     try:
-                        import pygame
                         pygame.mixer.music.play()
                     except Exception as e:
                         print(f"[WARN] 오디오 재생 실패: {e}")
@@ -2775,7 +2761,6 @@ class GameEngine:
                 self._current_session.start()
         elif state == GameState.PAUSED:
             # 일시정지 — 현재 세션 타이머는 계속 흐름 (추후 개선 가능)
-            import pygame
             pygame.mixer.music.pause()
         elif state == GameState.RESULT:
             self._result_data = self._scorer.get_final_result()
@@ -2787,9 +2772,7 @@ class GameEngine:
 
     def _play_song_preview(self, song: dict):
         """곡 선택 시 오디오 3초 미리듣기."""
-        import os
         import subprocess
-        import pygame
         if not pygame.mixer.get_init():
             return
         video_rel = song.get("video", "")
@@ -2818,7 +2801,6 @@ class GameEngine:
     def _stop_preview(self):
         """미리듣기 중지."""
         try:
-            import pygame
             if pygame.mixer.get_init():
                 pygame.mixer.music.stop()
         except Exception:
@@ -2826,7 +2808,6 @@ class GameEngine:
 
     def _take_screenshot(self):
         """현재 화면을 screenshots/ 폴더에 저장합니다."""
-        import pygame
         from datetime import datetime
         screenshots_dir = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -2843,7 +2824,6 @@ class GameEngine:
 
     def _leaderboard_load(self):
         """data/leaderboard.json 파일에서 리더보드를 로드한다."""
-        import json
         lb_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "leaderboard.json")
         lb_path = os.path.normpath(lb_path)
         try:
@@ -2854,7 +2834,6 @@ class GameEngine:
 
     def _leaderboard_save_result(self):
         """현재 게임 결과를 리더보드 파일에 추가로 저장한다."""
-        import json
         from datetime import datetime
         if not self._result_data:
             return
@@ -2899,11 +2878,9 @@ class GameEngine:
         if getattr(self, '_ref_landmarks', None) is not None:
             return  # 이미 로드됨
             
-        import os
         import subprocess
-        import pygame
         import numpy as np
-        import cv2 as _cv2
+        _cv2 = cv2
 
         self._ref_video_fps = 30.0
 
@@ -2965,7 +2942,7 @@ class GameEngine:
                     video_path = os.path.join(os.getcwd(), video_rel)
                 
                 if os.path.exists(video_path):
-                    import cv2 as _cv2
+                    _cv2 = cv2
                     cap = _cv2.VideoCapture(video_path)
                     
                     self._ref_video_fps = self._current_song.get(
@@ -3001,7 +2978,6 @@ class GameEngine:
                         from utils.async_video import AsyncVideoPlayer
                         
                         def _get_audio_time():
-                            import pygame
                             if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
                                 pm = pygame.mixer.music.get_pos()
                                 return (pm / 1000.0) if pm >= 0 else 0.0
@@ -3029,15 +3005,28 @@ class GameEngine:
                     print(f"[WARN] 레퍼런스 영상 찾을 수 없음: {video_path}")
 
     def shutdown(self):
-        """Clean up all resources."""
+        """Clean up all resources. 중복 호출에도 안전합니다."""
+        if getattr(self, '_shutdown_done', False):
+            return
+        self._shutdown_done = True
         self.running = False
         if getattr(self, '_async_camera', None) is not None:
             self._async_camera.stop()
         if getattr(self, '_async_video_player', None):
             self._async_video_player.stop()
             self._async_video_player = None
+        if getattr(self, '_camera', None) is not None:
+            try:
+                self._camera.release()
+            except Exception:
+                pass
         try:
-            import pygame
             pygame.quit()
+        except Exception:
+            pass
+        # pygame/SDL이 터미널 설정을 망가뜨릴 수 있으므로 복원
+        try:
+            if sys.stdin.isatty():
+                subprocess.run(["stty", "sane"], stdin=sys.stdin, timeout=2)
         except Exception:
             pass
