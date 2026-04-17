@@ -3,7 +3,7 @@
   "title": "404 New Era",
   "artist": "KIKI",
   "duration": 19,
-  "bpm": 120,
+  "bpm": 100,
   "difficulty": 5,
   "mode": ["challenge"],
   "video": "data/videos/404_mediapipe_processed.mp4",
