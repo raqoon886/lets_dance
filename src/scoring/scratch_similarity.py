@@ -43,7 +43,7 @@ class ScratchPoseSimilarity:
 
     def __init__(self, model_path: str, sequence_length=30, feature_dims=2,
                  input_layout="BTJC", target_joints=None, top_k=3,
-                 candidate_stride=3, interpreter=None):
+                 candidate_stride=3, interpreter=None, similarity_threshold=0.70):
         if input_layout not in self.LAYOUTS:
             raise ValueError(f"input_layout must be one of {self.LAYOUTS}: {input_layout}")
 
@@ -54,6 +54,7 @@ class ScratchPoseSimilarity:
         self.target_joints = list(target_joints or DANCE_JOINTS)
         self.top_k = max(1, int(top_k))
         self.candidate_stride = max(1, int(candidate_stride))
+        self.similarity_threshold = float(similarity_threshold)
 
         self._user_buffer = deque(maxlen=self.sequence_length)
         self._ref_embedding_cache = {}
@@ -150,6 +151,7 @@ class ScratchPoseSimilarity:
             reference_index,
             tolerance_frames,
             timing_penalty,
+            self.similarity_threshold,
         )
         if not sims:
             return 0.0
@@ -158,18 +160,30 @@ class ScratchPoseSimilarity:
 
     @staticmethod
     def _apply_timing_penalty(sims, candidate_indices, reference_index,
-                              tolerance_frames, timing_penalty):
-        """Penalize otherwise-good matches that are far from the current beat."""
+                              tolerance_frames, timing_penalty, similarity_threshold=0.0):
+        """Scale similarities and penalize matches far from the current beat."""
         timing_penalty = max(0.0, float(timing_penalty or 0.0))
         tolerance_frames = max(0, int(tolerance_frames or 0))
         scored = []
         for sim, end_idx in zip(np.asarray(sims).reshape(-1), candidate_indices):
             if not np.isfinite(sim):
                 continue
+                
             adjusted = float(sim)
+            
+            # 1. Similarity Rescaling: expand discriminative range using threshold
+            if similarity_threshold > 0.0:
+                if adjusted <= similarity_threshold:
+                    adjusted = 0.0
+                elif similarity_threshold < 1.0:
+                    adjusted = (adjusted - similarity_threshold) / (1.0 - similarity_threshold)
+
+            # 2. Timing Penalty: non-linear (quadratic) decay within tolerance
             if timing_penalty > 0.0 and tolerance_frames > 0:
                 offset = abs(int(reference_index) - int(end_idx))
-                adjusted -= timing_penalty * min(offset / tolerance_frames, 1.0)
+                penalty_ratio = min(offset / tolerance_frames, 1.0)
+                adjusted -= timing_penalty * (penalty_ratio ** 2)
+                
             scored.append(float(np.clip(adjusted, 0.0, 1.0)))
         return scored
 
