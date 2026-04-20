@@ -27,7 +27,7 @@ embedding:
 
 scratch:
   model_dir: "data/models/scratch"
-  model_name: "mlp_small_infonce"
+  model_name: "scratch_mlp_small_infonce"
   model_path: ""              # optional direct .tflite path; empty uses registry/model_name
   use_reference_cache: true
   reference_cache_dir: "data/cache/reference_embeddings"

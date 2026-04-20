@@ -190,22 +190,46 @@ class ScratchPoseSimilarity:
     def _load_interpreter(self):
         if not self.model_path or not os.path.exists(self.model_path):
             raise FileNotFoundError(f"Scratch TFLite model not found: {self.model_path}")
-        try:
-            from tflite_runtime.interpreter import Interpreter
-        except ImportError:
-            try:
-                import tensorflow as tf
-                Interpreter = tf.lite.Interpreter
-            except ImportError as exc:
-                raise ImportError(
-                    "Scratch scoring requires tflite-runtime or tensorflow. "
-                    "Install tflite-runtime for runtime, or tensorflow for training/dev."
-                ) from exc
+        Interpreter, backend = self._resolve_interpreter()
 
-        self._interpreter = Interpreter(model_path=self.model_path)
+        try:
+            self._interpreter = Interpreter(model_path=self.model_path)
+        except ValueError as exc:
+            if backend == "tflite-runtime" and "Didn't find op" in str(exc):
+                raise ValueError(
+                    "The installed tflite-runtime package is too old for this "
+                    "TFLite model. Install ai-edge-litert, or re-export the model "
+                    "with the same TensorFlow/TFLite version used by the runtime."
+                ) from exc
+            raise
+
         self._resize_dynamic_input()
         self._interpreter.allocate_tensors()
         self._refresh_io_details()
+
+    @staticmethod
+    def _resolve_interpreter():
+        try:
+            from ai_edge_litert.interpreter import Interpreter
+            return Interpreter, "ai-edge-litert"
+        except ImportError:
+            pass
+
+        try:
+            import tensorflow as tf
+            return tf.lite.Interpreter, "tensorflow"
+        except ImportError:
+            pass
+
+        try:
+            from tflite_runtime.interpreter import Interpreter
+            return Interpreter, "tflite-runtime"
+        except ImportError as exc:
+            raise ImportError(
+                "Scratch scoring requires ai-edge-litert, tensorflow, or "
+                "tflite-runtime. Install ai-edge-litert for the lightweight "
+                "runtime, or tensorflow for training/dev."
+            ) from exc
 
     def _resize_dynamic_input(self):
         details = self._interpreter.get_input_details()
