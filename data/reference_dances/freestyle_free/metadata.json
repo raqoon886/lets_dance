@@ -4,9 +4,7 @@
   "artist": "Måneskin",
   "duration": 211,
   "bpm": 134,
-  "difficulty": 0,
-  "mode": [
-    "freestyle"
-  ],
+  "difficulty": 4,
+  "mode": ["freestyle"],
   "audio": "data/videos/freestyle_free.ogg"
 }

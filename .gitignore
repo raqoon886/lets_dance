@@ -28,6 +28,9 @@ Thumbs.db
 *.log
 logs/
 
+# Leaderboard (기기마다 기록이 다르므로 제외)
+data/leaderboard.json
+
 # videos
 assets/videos/
 fps_check/recorded.avi

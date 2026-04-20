@@ -1,0 +1,12 @@
+{
+  "id": "smoke",
+  "title": "Smoke",
+  "artist": "Double D",
+  "duration": 209.6,
+  "difficulty": 5,
+  "mode": [
+    "freestyle"
+  ],
+  "audio": "data/videos/smoke.ogg",
+  "added_at": "2026-04-17 17:20:28"
+}

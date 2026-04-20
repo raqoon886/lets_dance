@@ -1,0 +1,13 @@
+{
+  "id": "shuffle_dance",
+  "title": "Shuffle Dance",
+  "artist": "Dance teacher SIMBA",
+  "duration": 26,
+  "bpm": 128,
+  "difficulty": 2,
+  "mode": ["practice"],
+  "video": "data/videos/shuffle_dance_mediapipe_processed.mp4",
+  "video_fps": 59.94,
+  "source_npy": "data/videos/shuffle_dance_mediapipe_processed_pose.npy",
+  "added_at": "2026-04-20 00:00:00"
+}

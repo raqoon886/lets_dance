@@ -1,0 +1,12 @@
+{
+  "id": "supernova",
+  "title": "Supernova",
+  "artist": "aespa",
+  "duration": 179,
+  "difficulty": 3,
+  "mode": [
+    "freestyle"
+  ],
+  "audio": "data/videos/supernova.ogg",
+  "added_at": "2026-04-20 00:00:00"
+}
