@@ -1,0 +1,187 @@
+{
+  "dance": "hiphop_move",
+  "source": "data/reference_dances/hiphop_move/reference.npy",
+  "shape": [
+    792,
+    33,
+    4
+  ],
+  "K": 10,
+  "base_seed": 42,
+  "min_ops": 1,
+  "config": {
+    "flip_p": 0.0,
+    "rot_p": 0.3,
+    "rot_deg": [
+      -10.0,
+      10.0
+    ],
+    "scale_p": 0.3,
+    "scale_range": [
+      0.9,
+      1.1
+    ],
+    "shear_p": 0.3,
+    "shear_range": [
+      -0.08,
+      0.08
+    ],
+    "bone_p": 0.3,
+    "bone_range": [
+      0.95,
+      1.05
+    ],
+    "smooth_p": 0.3,
+    "smooth_sigma": [
+      0.5,
+      1.5
+    ],
+    "drop_p": 0.3,
+    "drop_fraction": [
+      0.02,
+      0.08
+    ],
+    "jitter_p": 0.3,
+    "jitter_sigma": [
+      0.003,
+      0.015
+    ]
+  },
+  "augments": [
+    {
+      "dance": "hiphop_move",
+      "file": "aug_00.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 2000949628,
+      "final_seed": 2000949628,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -4.074875493022838,
+        "smooth_sigma": 0.9661827130650609,
+        "jitter_sigma": 0.005634456586740632
+      }
+    },
+    {
+      "dance": "hiphop_move",
+      "file": "aug_01.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 624769223,
+      "final_seed": 624769223,
+      "ops": {
+        "rot_deg": 0.012180399641357198,
+        "drop_fraction": 0.054954910180509464
+      }
+    },
+    {
+      "dance": "hiphop_move",
+      "file": "aug_02.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1162022670,
+      "final_seed": 1162022670,
+      "ops": {
+        "rot_deg": -0.877472347449002,
+        "smooth_sigma": 0.8824520849634544,
+        "jitter_sigma": 0.014163304802786384
+      }
+    },
+    {
+      "dance": "hiphop_move",
+      "file": "aug_03.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1399081035,
+      "final_seed": 1399081035,
+      "ops": {
+        "rot_deg": 6.780112365202591,
+        "scale": 0.9110675292579106,
+        "smooth_sigma": 0.9949506029413691
+      }
+    },
+    {
+      "dance": "hiphop_move",
+      "file": "aug_04.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 507834113,
+      "final_seed": 507834113,
+      "ops": {
+        "rot_deg": 7.945386404487003,
+        "scale": 0.9451473201896058,
+        "drop_fraction": 0.023628574738362582
+      }
+    },
+    {
+      "dance": "hiphop_move",
+      "file": "aug_05.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 401176005,
+      "final_seed": 401176005,
+      "ops": {
+        "smooth_sigma": 0.8376651064634708
+      }
+    },
+    {
+      "dance": "hiphop_move",
+      "file": "aug_06.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 713845486,
+      "final_seed": 713845486,
+      "ops": {
+        "rot_deg": -2.2779289271008274,
+        "smooth_sigma": 1.4773114801962106,
+        "drop_fraction": 0.07461789823858445
+      }
+    },
+    {
+      "dance": "hiphop_move",
+      "file": "aug_07.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 613634743,
+      "final_seed": 613634743,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": 9.096852327332922,
+        "scale": 0.9356013935309302,
+        "shear": [
+          -0.01482122617993642,
+          -0.059504447672138916
+        ]
+      }
+    },
+    {
+      "dance": "hiphop_move",
+      "file": "aug_08.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1986203310,
+      "final_seed": 1986203310,
+      "ops": {
+        "jitter_sigma": 0.005013805654330477
+      }
+    },
+    {
+      "dance": "hiphop_move",
+      "file": "aug_09.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 978251554,
+      "final_seed": 978251554,
+      "ops": {
+        "scale": 1.0206303947351683,
+        "drop_fraction": 0.04214146199407106
+      }
+    }
+  ]
+}

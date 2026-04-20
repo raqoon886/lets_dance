@@ -1,0 +1,191 @@
+{
+  "dance": "basic_movement",
+  "source": "data/reference_dances/basic_movement/reference.npy",
+  "shape": [
+    476,
+    33,
+    3
+  ],
+  "K": 10,
+  "base_seed": 42,
+  "min_ops": 1,
+  "config": {
+    "flip_p": 0.0,
+    "rot_p": 0.3,
+    "rot_deg": [
+      -10.0,
+      10.0
+    ],
+    "scale_p": 0.3,
+    "scale_range": [
+      0.9,
+      1.1
+    ],
+    "shear_p": 0.3,
+    "shear_range": [
+      -0.08,
+      0.08
+    ],
+    "bone_p": 0.3,
+    "bone_range": [
+      0.95,
+      1.05
+    ],
+    "smooth_p": 0.3,
+    "smooth_sigma": [
+      0.5,
+      1.5
+    ],
+    "drop_p": 0.3,
+    "drop_fraction": [
+      0.02,
+      0.08
+    ],
+    "jitter_p": 0.3,
+    "jitter_sigma": [
+      0.003,
+      0.015
+    ]
+  },
+  "augments": [
+    {
+      "dance": "basic_movement",
+      "file": "aug_00.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1147943682,
+      "final_seed": 1147943682,
+      "ops": {
+        "smooth_sigma": 0.9866039392953861
+      }
+    },
+    {
+      "dance": "basic_movement",
+      "file": "aug_01.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1999015475,
+      "final_seed": 1999015475,
+      "ops": {
+        "jitter_sigma": 0.005209744852813492
+      }
+    },
+    {
+      "dance": "basic_movement",
+      "file": "aug_02.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1597547862,
+      "final_seed": 1597547862,
+      "ops": {
+        "rot_deg": -5.913368859572086,
+        "drop_fraction": 0.06371957643562981
+      }
+    },
+    {
+      "dance": "basic_movement",
+      "file": "aug_03.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1666871585,
+      "final_seed": 1666871585,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "shear": [
+          0.028579266670690606,
+          -0.06001351690456928
+        ],
+        "jitter_sigma": 0.009821386672754112
+      }
+    },
+    {
+      "dance": "basic_movement",
+      "file": "aug_04.npy",
+      "n_ops": 2,
+      "attempts": 2,
+      "initial_seed": 995291760,
+      "final_seed": 945072318,
+      "ops": {
+        "scale": 0.9895705259169432,
+        "smooth_sigma": 1.3578787409883417
+      }
+    },
+    {
+      "dance": "basic_movement",
+      "file": "aug_05.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1504302760,
+      "final_seed": 1504302760,
+      "ops": {
+        "jitter_sigma": 0.009085889989371862
+      }
+    },
+    {
+      "dance": "basic_movement",
+      "file": "aug_06.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 300168333,
+      "final_seed": 300168333,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "drop_fraction": 0.02355235452481269
+      }
+    },
+    {
+      "dance": "basic_movement",
+      "file": "aug_07.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1082503531,
+      "final_seed": 1082503531,
+      "ops": {
+        "rot_deg": -8.673809362335838,
+        "shear": [
+          -0.07208892257547778,
+          -0.04984012738274174
+        ],
+        "drop_fraction": 0.07157259072168835,
+        "jitter_sigma": 0.01208920320352877
+      }
+    },
+    {
+      "dance": "basic_movement",
+      "file": "aug_08.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1560540693,
+      "final_seed": 1560540693,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": 3.1792995127369963,
+        "shear": [
+          -0.015082006671363044,
+          0.06436047875567293
+        ],
+        "smooth_sigma": 0.9489412590021135
+      }
+    },
+    {
+      "dance": "basic_movement",
+      "file": "aug_09.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 298632391,
+      "final_seed": 298632391,
+      "ops": {
+        "drop_fraction": 0.025803429701811813
+      }
+    }
+  ]
+}

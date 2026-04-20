@@ -1,0 +1,198 @@
+{
+  "dance": "rasputin",
+  "source": "data/reference_dances/rasputin/reference.npy",
+  "shape": [
+    3147,
+    33,
+    3
+  ],
+  "K": 10,
+  "base_seed": 42,
+  "min_ops": 1,
+  "config": {
+    "flip_p": 0.0,
+    "rot_p": 0.3,
+    "rot_deg": [
+      -10.0,
+      10.0
+    ],
+    "scale_p": 0.3,
+    "scale_range": [
+      0.9,
+      1.1
+    ],
+    "shear_p": 0.3,
+    "shear_range": [
+      -0.08,
+      0.08
+    ],
+    "bone_p": 0.3,
+    "bone_range": [
+      0.95,
+      1.05
+    ],
+    "smooth_p": 0.3,
+    "smooth_sigma": [
+      0.5,
+      1.5
+    ],
+    "drop_p": 0.3,
+    "drop_fraction": [
+      0.02,
+      0.08
+    ],
+    "jitter_p": 0.3,
+    "jitter_sigma": [
+      0.003,
+      0.015
+    ]
+  },
+  "augments": [
+    {
+      "dance": "rasputin",
+      "file": "aug_00.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1498460973,
+      "final_seed": 1498460973,
+      "ops": {
+        "shear": [
+          0.0729854079390068,
+          0.07110018286087645
+        ]
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_01.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 901057418,
+      "final_seed": 901057418,
+      "ops": {
+        "shear": [
+          0.03169307536986647,
+          -0.07739482547442053
+        ],
+        "smooth_sigma": 1.430906779791909,
+        "drop_fraction": 0.06015653930716923,
+        "jitter_sigma": 0.009705619337793712
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_02.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 847906917,
+      "final_seed": 847906917,
+      "ops": {
+        "rot_deg": 9.355201415376499,
+        "drop_fraction": 0.069502998491996
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_03.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 648781923,
+      "final_seed": 648781923,
+      "ops": {
+        "rot_deg": -9.492315842878998
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_04.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 2129156816,
+      "final_seed": 2129156816,
+      "ops": {
+        "rot_deg": 4.25949608689859,
+        "scale": 0.9575196772554315,
+        "jitter_sigma": 0.01149159487620664
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_05.npy",
+      "n_ops": 3,
+      "attempts": 2,
+      "initial_seed": 488974326,
+      "final_seed": 1148478999,
+      "ops": {
+        "scale": 0.9500493510091405,
+        "smooth_sigma": 0.6217926262101054,
+        "drop_fraction": 0.02539271469077486
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_06.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 262817921,
+      "final_seed": 262817921,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -1.1102145984504919,
+        "shear": [
+          0.061948225621709554,
+          0.03505472731729284
+        ]
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_07.npy",
+      "n_ops": 5,
+      "attempts": 1,
+      "initial_seed": 920013408,
+      "final_seed": 920013408,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": 3.805711547930459,
+        "scale": 1.0797007005771186,
+        "drop_fraction": 0.02065638076982238,
+        "jitter_sigma": 0.014674848907581958
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_08.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1328636270,
+      "final_seed": 1328636270,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -9.283493511650997,
+        "scale": 1.0175197091841524,
+        "jitter_sigma": 0.01149783670292474
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_09.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1098236208,
+      "final_seed": 1098236208,
+      "ops": {
+        "smooth_sigma": 0.5887676989628428,
+        "jitter_sigma": 0.007710318843317704
+      }
+    }
+  ]
+}
