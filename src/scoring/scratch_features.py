@@ -41,10 +41,18 @@ def normalize_pose_landmarks(landmarks: np.ndarray, target_joints=None,
     pose[:, :2] -= center
 
     shoulder_width = np.linalg.norm(pose[left_shoulder, :2] - pose[right_shoulder, :2])
-    if np.isfinite(shoulder_width) and shoulder_width > 1e-6:
-        pose[:, :2] /= shoulder_width
+    
+    # Calculate torso center and length to establish a reliable scale minimum
+    torso_center = (pose[left_shoulder, :2] + pose[right_shoulder, :2]) * 0.5
+    torso_length = np.linalg.norm(center - torso_center)
+    
+    # Prevent scaling explosion when facing sideways by ensuring max width
+    scale = max(shoulder_width, torso_length * 0.5)
+
+    if np.isfinite(scale) and scale > 1e-6:
+        pose[:, :2] /= scale
         if feature_dims >= 3:
-            pose[:, 2] /= shoulder_width
+            pose[:, 2] /= scale
 
     return pose.astype(np.float32)
 
