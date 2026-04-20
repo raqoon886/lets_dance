@@ -72,7 +72,23 @@ class ResultScreen:
         Returns:
             'retry', 'menu', 'details', or None
         """
-        # TODO: Button click/key handling
+        import pygame
+
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    self.app.play_sfx("click")
+                    return "retry"
+                elif event.key in (pygame.K_ESCAPE, pygame.K_m):
+                    self.app.play_sfx("click")
+                    return "menu"
+                elif event.key == pygame.K_d:
+                    self.app.play_sfx("click")
+                    return "details"
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                # TODO: check event.pos against button rects when defined
+                self.app.play_sfx("click")
+
         return None
 
     @staticmethod
