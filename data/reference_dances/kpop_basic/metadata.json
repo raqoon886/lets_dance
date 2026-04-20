@@ -4,7 +4,7 @@
   "artist": "Let's Dance",
   "duration": 299,
   "bpm": 128,
-  "difficulty": 0,
+  "difficulty": 1,
   "mode": ["practice"],
   "video": "data/videos/gukmin_exercise_mediapipe_processed.mp4",
   "video_fps": 24.0,

@@ -1,0 +1,12 @@
+{
+  "id": "hey_mama",
+  "title": "Hey Mama",
+  "artist": "David Guetta",
+  "duration": 257,
+  "difficulty": 5,
+  "mode": [
+    "freestyle"
+  ],
+  "audio": "data/videos/hey_mama.ogg",
+  "added_at": "2026-04-20 00:00:00"
+}

@@ -4,7 +4,7 @@
   "artist": "Let's Dance",
   "duration": 23,
   "bpm": 100,
-  "difficulty": 0,
+  "difficulty": 3,
   "mode": ["practice"],
   "video": "data/videos/beginner_wave_mediapipe_processed.mp4",
   "video_fps": 30.0,

@@ -1,8 +1,9 @@
 {
   "id": "smoke",
   "title": "Smoke",
+  "artist": "Double D",
   "duration": 209.6,
-  "difficulty": 0,
+  "difficulty": 5,
   "mode": [
     "freestyle"
   ],

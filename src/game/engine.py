@@ -1434,7 +1434,7 @@ class GameEngine:
         tick = self._neon_tick
 
         MODE_LABELS = {"practice": "PRACTICE", "challenge": "CHALLENGE", "freestyle": "FREE STYLE"}
-        DIFF_STARS  = {0: "FREE", 1: "★☆☆☆☆", 2: "★★☆☆☆", 3: "★★★☆☆", 4: "★★★★☆", 5: "★★★★★"}
+        DIFF_STARS  = {0: "", 1: "★☆☆☆☆", 2: "★★☆☆☆", 3: "★★★☆☆", 4: "★★★★☆", 5: "★★★★★"}
         MODE_COLORS = {"practice": (0, 220, 180), "challenge": (255, 190, 0),
                        "freestyle": (200, 100, 255)}
         mode_col    = MODE_COLORS.get(self._current_mode, (180, 180, 255))
@@ -1530,7 +1530,7 @@ class GameEngine:
                 dur_str = f"{dur_raw // 60}m {dur_raw % 60}s" if dur_raw >= 60 else f"{dur_raw}s"
                 mode_list = song.get('mode', [])
                 if 'practice' in mode_list or 'freestyle' in mode_list:
-                    info = dur_str
+                    info = f"{dur_str}  ·  {diff}" if diff else dur_str
                 else:
                     info = f"BPM {song.get('bpm',0)}  ·  {dur_str}  ·  {diff}"
                 info_col = self._neon_color(mode_col, tick, 0.7) if selected else (130, 125, 160)
@@ -1588,9 +1588,9 @@ class GameEngine:
                 if 'practice' not in sel_modes and 'freestyle' not in sel_modes:
                     detail_items.append(("BPM", str(sel.get("bpm", 0))))
                 detail_items.append(("LENGTH", sel_dur_str))
-                if 'practice' not in sel_modes and 'freestyle' not in sel_modes:
-                    detail_items.append(
-                        ("LEVEL",    DIFF_STARS.get(sel.get("difficulty", 0), "-")))
+                diff_val = DIFF_STARS.get(sel.get("difficulty", 0), "")
+                if diff_val:
+                    detail_items.append(("LEVEL", diff_val))
                 avail_h   = panel.height - start_h - start_m * 2 - 16
                 item_h    = min(54, max(38, avail_h // max(len(detail_items), 1)))
                 py_detail = panel.y + 14
@@ -2487,6 +2487,13 @@ class GameEngine:
         )
         self._display.blit(hint, hint.get_rect(center=(w // 2, h - MARGIN_BOTTOM + 10)))
 
+    @staticmethod
+    def _fmt_lb_date(date_str: str) -> str:
+        """리더보드 날짜 포매팅: 'YYYY-MM-DD HH:MM' → 'MM/DD HH:MM' (11자)."""
+        if len(date_str) >= 16:
+            return date_str[5:10].replace("-", "/") + " " + date_str[11:16]
+        return date_str[:10]
+
     def _render_leaderboard(self, w, h):
         """리더보드 화면 렌더링."""
 
@@ -2555,7 +2562,7 @@ class GameEngine:
 
         # 테이블 헤더
         COL_W = max(50, (w - 40) // 5)
-        headers = ["RANK", "SONG", "SCORE", "GRADE", "DATE"]
+        headers = ["RANK", "SONG", "SCORE", "GRADE", "DATE/TIME"]
         header_xs = [20 + i * COL_W for i in range(5)]
         header_col = (180, 180, 255)
         for hi, (hdr, hx) in enumerate(zip(headers, header_xs)):
@@ -2580,7 +2587,7 @@ class GameEngine:
                     entry.get("title", entry.get("song_id", "?"))[:12],
                     str(entry.get("score", 0)),
                     entry.get("grade", "-"),
-                    entry.get("date", "")[:10],
+                    self._fmt_lb_date(entry.get("date", "")),
                 ]
                 for vi, (val, vx) in enumerate(zip(vals, header_xs)):
                     vs = self._fonts["small_retro"].render(val, True, row_col)
@@ -2608,7 +2615,7 @@ class GameEngine:
         self._display.blit(lbl, lbl.get_rect(center=back_rect.center))
 
         hint = self._fonts["small_retro"].render(
-            "←/→: SWITCH TAB   ↑/↓: CONTENT↔BACK   ENTER/SPACE/ESC/B: BACK", True, (120, 110, 160))
+            "←/→: SWITCH TAB   ↑/↓: SWITCH TAB   ENTER/SPACE/ESC/B: BACK", True, (120, 110, 160))
         self._display.blit(hint, hint.get_rect(center=(w//2, h - 22)))
 
     def _render_settings(self, w, h):
@@ -2670,11 +2677,11 @@ class GameEngine:
         ARROW_BTN_W = 36
         ARROW_BTN_H = 36
         slider_x    = CX - SLIDER_W // 2
-        slider_y    = vol_y + 12
+        slider_y    = vol_y + 36   # 레이블 아래에 슬라이더 배치
 
         vol_lbl = self._fonts["small_retro"].render("BGM VOLUME", True,
                                                      self._neon_color((180, 160, 255), tick))
-        self._display.blit(vol_lbl, vol_lbl.get_rect(midright=(slider_x - 12, slider_y + SLIDER_H//2)))
+        self._display.blit(vol_lbl, vol_lbl.get_rect(center=(CX, vol_y + 14)))
 
         # 슬라이더 트랙
         pygame.draw.rect(self._display, (50, 45, 90),
@@ -2857,25 +2864,38 @@ class GameEngine:
             self._generic_focus_idx = 0
 
     def _play_song_preview(self, song: dict):
-        """곡 선택 시 오디오 3초 미리듣기."""
+        """곡 선택 시 오디오 미리듣기."""
         import subprocess
         if not pygame.mixer.get_init():
             return
-        video_rel = song.get("video", "")
-        if not video_rel:
-            return
+
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        video_path = os.path.join(project_root, video_rel)
-        if not os.path.exists(video_path):
+        audio_path = None
+
+        video_rel = song.get("video", "")
+        if video_rel:
+            # video가 있는 경우 (practice / challenge 모드)
+            video_path = os.path.join(project_root, video_rel)
+            if not os.path.exists(video_path):
+                return
+            audio_path = video_path.rsplit(".", 1)[0] + ".ogg"
+            if not os.path.exists(audio_path):
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "libvorbis", "-q:a", "4", audio_path],
+                    capture_output=True,
+                )
+        else:
+            # video 없이 audio만 있는 경우 (프리스타일 모드)
+            audio_rel = song.get("audio", "")
+            if not audio_rel:
+                return
+            audio_path = os.path.join(project_root, audio_rel)
+            if not os.path.exists(audio_path):
+                audio_path = os.path.join(os.getcwd(), audio_rel)
+
+        if not audio_path or not os.path.exists(audio_path):
             return
-        audio_path = video_path.rsplit(".", 1)[0] + ".ogg"
-        if not os.path.exists(audio_path):
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "libvorbis", "-q:a", "4", audio_path],
-                capture_output=True,
-            )
-        if not os.path.exists(audio_path):
-            return
+
         try:
             pygame.mixer.music.stop()
             pygame.mixer.music.load(audio_path)
