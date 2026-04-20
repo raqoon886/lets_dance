@@ -145,6 +145,17 @@ class GameEngine:
         # 지연을 최소화하기 위해 버퍼를 512로 줄여서 선제 초기화합니다.
         pygame.mixer.pre_init(44100, -16, 2, 512)
         pygame.mixer.init()
+
+        # SFX 로드 (click)
+        self._sfx: dict = {}
+        _sfx_volume = float(self.config.get("audio", {}).get("sfx_volume", 0.8))
+        _click_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                   "assets", "sounds", "click.mp3")
+        if os.path.exists(_click_path):
+            _click_snd = pygame.mixer.Sound(_click_path)
+            _click_snd.set_volume(_sfx_volume)
+            self._sfx["click"] = _click_snd
+
         # 키보드 반복 입력: 200ms 후 첫 반복, 이후 80ms 간격
         pygame.key.set_repeat(200, 80)
 
@@ -890,6 +901,10 @@ class GameEngine:
 
     def _on_button_press(self, btn_name: str):
         """버튼 이름에 따라 액션 실행."""
+        # 클릭 효과음
+        if "click" in self._sfx:
+            self._sfx["click"].play()
+
         # ── 메뉴 화면 버튼 ──
         if btn_name == "btn_practice":
             self._current_mode = "practice"
