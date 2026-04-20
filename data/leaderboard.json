@@ -1,0 +1,54 @@
+[
+  {
+    "song_id": "cheerup_dance",
+    "title": "Cheer Up",
+    "score": 18819.6,
+    "grade": "OK",
+    "mode": "challenge",
+    "date": "2026-04-16 16:52"
+  },
+  {
+    "song_id": "hiphop_move",
+    "title": "Breaking Dance!",
+    "score": 14269.4,
+    "grade": "Good",
+    "date": "2026-04-16 14:21"
+  },
+  {
+    "song_id": "404_dance",
+    "title": "404 New Era",
+    "score": 8012.8,
+    "grade": "Miss",
+    "date": "2026-04-16 14:30"
+  },
+  {
+    "song_id": "404_dance",
+    "title": "404 New Era",
+    "score": 7836.6,
+    "grade": "Miss",
+    "date": "2026-04-16 14:24"
+  },
+  {
+    "song_id": "404_dance",
+    "title": "404 New Era",
+    "score": 7594.6,
+    "grade": "Miss",
+    "date": "2026-04-16 14:16"
+  },
+  {
+    "song_id": "404_dance",
+    "title": "404 New Era",
+    "score": 2153.0,
+    "grade": "Miss",
+    "mode": "challenge",
+    "date": "2026-04-16 14:52"
+  },
+  {
+    "song_id": "cheerup_dance",
+    "title": "Cheer Up",
+    "score": 322.5,
+    "grade": "Miss",
+    "mode": "challenge",
+    "date": "2026-04-16 14:51"
+  }
+]

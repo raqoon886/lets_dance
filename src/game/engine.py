@@ -60,6 +60,11 @@ class GameEngine:
         self._score_hold_seconds = 0.3
         self._model_warmup_direct_fallback = True
         self._fallback_similarity_method = "angle"
+        self._missing_pose_penalty_enabled = True
+        self._missing_pose_similarity = 0.0
+        self._missing_pose_grace_seconds = 1.0
+        self._timing_offset_penalty_enabled = True
+        self._timing_offset_max_penalty = 0.08
         self._warned_scratch_no_ref = False
         self._scorer = None
         self._ui = None
@@ -186,6 +191,20 @@ class GameEngine:
                if k in ("score_scale", "combo_multiplier", "grade_thresholds", "baseline")}
         )
         self._feedback_gen = FeedbackGenerator()
+
+        scoring_cfg = self.config.get("scoring", {})
+        missing_cfg = scoring_cfg.get("missing_pose_penalty", {})
+        if isinstance(missing_cfg, bool):
+            missing_cfg = {"enabled": missing_cfg}
+        self._missing_pose_penalty_enabled = bool(missing_cfg.get("enabled", True))
+        self._missing_pose_similarity = float(missing_cfg.get("similarity", 0.0))
+        self._missing_pose_grace_seconds = float(missing_cfg.get("grace_seconds", 1.0))
+
+        timing_cfg = scoring_cfg.get("timing_offset_penalty", {})
+        if isinstance(timing_cfg, bool):
+            timing_cfg = {"enabled": timing_cfg}
+        self._timing_offset_penalty_enabled = bool(timing_cfg.get("enabled", True))
+        self._timing_offset_max_penalty = float(timing_cfg.get("max_penalty", 0.08))
 
         smoothing_cfg = self.config.get("runtime_smoothing", {})
         self._pose_hold_frames = int(smoothing_cfg.get("pose_hold_frames", 6))
@@ -1018,6 +1037,23 @@ class GameEngine:
         if self._last_feedback is not None and self._feedback_timer <= 0 and self._score_hold_seconds > 0:
             self._feedback_timer = self._score_hold_seconds
 
+    def _timing_penalty_value(self):
+        if not self._timing_offset_penalty_enabled:
+            return 0.0
+        return max(0.0, float(self._timing_offset_max_penalty))
+
+    def _should_apply_missing_pose_penalty(self):
+        """Return True when a scoring tick should count as a Miss for no pose."""
+        if not self._missing_pose_penalty_enabled:
+            return False
+        if self._current_session is None:
+            return False
+        if self._ref_frame_landmarks is None:
+            return False
+        if self._current_session.elapsed_time < self._missing_pose_grace_seconds:
+            return False
+        return True
+
     def _pose_similarity_with_method(self, comparator, user_landmarks, ref_landmarks, method):
         if method == "euclidean":
             return comparator.euclidean_similarity(user_landmarks, ref_landmarks)
@@ -1041,11 +1077,14 @@ class GameEngine:
         end_idx = self._ref_current_idx + 1
 
         best_sims = []
+        timing_penalty = self._timing_penalty_value()
         for ri in range(start_idx, end_idx):
             ref_lm = self._ref_landmarks[ri]
-            best_sims.append(
-                self._pose_similarity_with_method(comparator, user_landmarks, ref_lm, method)
-            )
+            sim = self._pose_similarity_with_method(comparator, user_landmarks, ref_lm, method)
+            if timing_penalty > 0.0 and tolerance_frames > 0:
+                offset = abs(self._ref_current_idx - ri)
+                sim -= timing_penalty * min(offset / tolerance_frames, 1.0)
+            best_sims.append(float(max(0.0, min(1.0, sim))))
         if not best_sims:
             return None
 
@@ -1118,22 +1157,24 @@ class GameEngine:
         #   매 프레임: buffer_frame()으로 포즈 버퍼 축적
         #   N프레임마다: compute_from_buffer()로 모델 추론 + 점수 산출
         sim = None
-        if self._current_mode == "freestyle":
-            pass  # 프리스타일: 채점 없음
-        elif scoring_landmarks is not None:
-            # ── 매 프레임: 버퍼 축적 ──
-            if self._score_method == "scratch" and hasattr(self, '_scratch_comparator') and self._scratch_comparator:
-                self._scratch_comparator.buffer_frame(scoring_landmarks)
-            elif self._score_method == "embedding" and hasattr(self, '_embedding_comparator') and self._embedding_comparator:
-                self._embedding_comparator.buffer_frame(scoring_landmarks)
+        if self._current_mode != "freestyle":
+            if scoring_landmarks is not None:
+                # ── 매 프레임: 버퍼 축적 ──
+                if self._score_method == "scratch" and hasattr(self, '_scratch_comparator') and self._scratch_comparator:
+                    self._scratch_comparator.buffer_frame(scoring_landmarks)
+                elif self._score_method == "embedding" and hasattr(self, '_embedding_comparator') and self._embedding_comparator:
+                    self._embedding_comparator.buffer_frame(scoring_landmarks)
 
-            # ── 판정 주기 도달 시: 유사도 계산 ──
+            # ── 판정 주기 도달 시: 유사도 계산 또는 missing-pose Miss 집계 ──
             self._scoring_frame_counter += 1
             if self._scoring_frame_counter >= self._scoring_interval:
                 self._scoring_frame_counter = 0
 
                 if self._ref_frame_landmarks is not None:
-                    if self._score_method == "direct":
+                    if scoring_landmarks is None:
+                        if self._should_apply_missing_pose_penalty():
+                            sim = self._missing_pose_similarity
+                    elif self._score_method == "direct":
                         sim = self._direct_window_similarity(
                             scoring_landmarks,
                             method=self._similarity_method,
@@ -1145,6 +1186,7 @@ class GameEngine:
                             self._ref_landmarks,
                             self._ref_current_idx,
                             tolerance_frames=tolerance_frames,
+                            timing_penalty=self._timing_penalty_value(),
                         )
                         if sim is None and self._model_warmup_direct_fallback:
                             sim = self._direct_window_similarity(
@@ -1157,6 +1199,7 @@ class GameEngine:
                             self._ref_landmarks,
                             self._ref_current_idx,
                             tolerance_frames=tolerance_frames,
+                            timing_penalty=self._timing_penalty_value(),
                         )
                         if sim is None and self._model_warmup_direct_fallback:
                             sim = self._direct_window_similarity(
@@ -1164,7 +1207,9 @@ class GameEngine:
                                 method=self._fallback_similarity_method,
                             )
                 else:
-                    if self._score_method in ("scratch", "embedding"):
+                    if scoring_landmarks is None:
+                        pass
+                    elif self._score_method in ("scratch", "embedding"):
                         if not self._warned_scratch_no_ref:
                             print(f"[WARN] {self._score_method} scoring requires reference.npy; scoring paused.")
                             self._warned_scratch_no_ref = True
@@ -2801,6 +2846,7 @@ class GameEngine:
                     self._current_session = None
                 pygame.mixer.music.stop()
                 self._scorer.reset()
+                self._scoring_frame_counter = 0
                 self._last_feedback = None
                 self._feedback_timer = 0.0
                 self._current_frame = None

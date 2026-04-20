@@ -84,7 +84,8 @@ class ScratchPoseSimilarity:
         self._precomputed_ref_path = None
 
     def compute(self, user_landmarks: np.ndarray, reference_sequence: np.ndarray,
-                reference_index: int, tolerance_frames: int = 0):
+                reference_index: int, tolerance_frames: int = 0,
+                timing_penalty: float = 0.0):
         """Return a finite similarity in [0, 1], or None until a full window exists.
 
         This method combines buffer_frame() + compute_from_buffer() for
@@ -95,7 +96,8 @@ class ScratchPoseSimilarity:
 
         self.buffer_frame(user_landmarks)
         return self.compute_from_buffer(reference_sequence, reference_index,
-                                        tolerance_frames=tolerance_frames)
+                                        tolerance_frames=tolerance_frames,
+                                        timing_penalty=timing_penalty)
 
     # ── split API: buffer accumulation vs. inference ──────────────
 
@@ -114,7 +116,8 @@ class ScratchPoseSimilarity:
         ))
 
     def compute_from_buffer(self, reference_sequence: np.ndarray,
-                            reference_index: int, tolerance_frames: int = 0):
+                            reference_index: int, tolerance_frames: int = 0,
+                            timing_penalty: float = 0.0):
         """Run model inference on the current buffer and return similarity.
 
         Returns None if the buffer is not yet full (< sequence_length frames).
@@ -140,11 +143,35 @@ class ScratchPoseSimilarity:
                     reference_sequence, end_idx))
                 for end_idx in candidate_indices
             ]
-        sims = [float(np.clip(s, 0.0, 1.0)) for s in sims if np.isfinite(s)]
+
+        sims = self._apply_timing_penalty(
+            sims,
+            candidate_indices,
+            reference_index,
+            tolerance_frames,
+            timing_penalty,
+        )
         if not sims:
             return 0.0
         sims.sort(reverse=True)
         return float(np.mean(sims[:min(self.top_k, len(sims))]))
+
+    @staticmethod
+    def _apply_timing_penalty(sims, candidate_indices, reference_index,
+                              tolerance_frames, timing_penalty):
+        """Penalize otherwise-good matches that are far from the current beat."""
+        timing_penalty = max(0.0, float(timing_penalty or 0.0))
+        tolerance_frames = max(0, int(tolerance_frames or 0))
+        scored = []
+        for sim, end_idx in zip(np.asarray(sims).reshape(-1), candidate_indices):
+            if not np.isfinite(sim):
+                continue
+            adjusted = float(sim)
+            if timing_penalty > 0.0 and tolerance_frames > 0:
+                offset = abs(int(reference_index) - int(end_idx))
+                adjusted -= timing_penalty * min(offset / tolerance_frames, 1.0)
+            scored.append(float(np.clip(adjusted, 0.0, 1.0)))
+        return scored
 
     def _load_interpreter(self):
         if not self.model_path or not os.path.exists(self.model_path):

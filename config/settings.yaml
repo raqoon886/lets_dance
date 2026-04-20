@@ -41,6 +41,13 @@ scoring:
   score_scale: 100
   combo_multiplier: 1.5
   baseline: 0.3               # 서 있는 자세의 기본 유사도 — raw sim에서 이 값을 빼고 0~100으로 리매핑
+  missing_pose_penalty:
+    enabled: true             # scoring tick에서 포즈가 없으면 Miss로 집계
+    similarity: 0.0           # missing pose를 scorer에 넣을 raw similarity
+    grace_seconds: 1.0        # 곡 시작 직후 카메라/모델 안정화 시간
+  timing_offset_penalty:
+    enabled: true             # tolerance window에서 현재 박자와 먼 후보는 감점
+    max_penalty: 0.08         # tolerance window 끝 후보에 적용되는 최대 raw similarity 감점
   grade_thresholds:
     perfect: 90
     great: 75
