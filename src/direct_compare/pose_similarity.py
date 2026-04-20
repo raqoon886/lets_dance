@@ -132,9 +132,10 @@ class PoseSimilarity:
         return float(np.exp(-2.0 * mean_dist))
 
     def hybrid_similarity(self, pose_a: np.ndarray, pose_b: np.ndarray,
-                          cosine_weight=0.3, euclidean_weight=0.7) -> float:
+                          angle_weight=0.5, euclidean_weight=0.5) -> float:
         """
-        코사인 + 유클리드 혼합 유사도
+        각도(정밀한 관절 구부림) + 유클리드(전체적인 손발의 위치 공간) 혼합 유사도.
+        가만히 서서 각도만 맞추는 꼼수를 차단합니다.
 
         Args:
             pose_a: (33, 4) landmarks
@@ -145,10 +146,13 @@ class PoseSimilarity:
         Returns:
             유사도 (0.0 ~ 1.0)
         """
-        cos_sim = self.cosine_similarity(pose_a, pose_b)
+        ang_sim = self.angle_similarity(pose_a, pose_b)
         euc_sim = self.euclidean_similarity(pose_a, pose_b)
+        
+        # 두 유사도 중 하나라도 낮으면 기하급수적으로 점수를 깎기 위해 곱셈 혹은 최소값 기반 가중치도 고려 가능하지만
+        # 일단 선형 결합으로도 두 조건(각도, 위치)을 동시에 만족해야 높은 점수가 나옵니다.
         return float(np.clip(
-            cosine_weight * cos_sim + euclidean_weight * euc_sim, 0.0, 1.0))
+            angle_weight * ang_sim + euclidean_weight * euc_sim, 0.0, 1.0))
 
     # ── 관절 각도(Angle) 기반 유사도 ──
 
@@ -190,7 +194,12 @@ class PoseSimilarity:
         Returns:
             (8,) 각도 배열 (라디안, 0~π)
         """
-        coords = landmarks[:, :2]  # x, y만 사용
+        # z축 정보가 있으면 3D 각도를 계산하여 앞뒤로 뻗는 동작의 2D투영 한계를 극복.
+        if landmarks.shape[1] >= 3:
+            coords = landmarks[:, :3]
+        else:
+            coords = landmarks[:, :2]
+
         angles = np.array([
             self._calc_angle(coords[a], coords[b], coords[c])
             for a, b, c in self.ANGLE_JOINTS
