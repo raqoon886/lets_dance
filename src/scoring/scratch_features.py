@@ -41,13 +41,16 @@ def normalize_pose_landmarks(landmarks: np.ndarray, target_joints=None,
     pose[:, :2] -= center
 
     shoulder_width = np.linalg.norm(pose[left_shoulder, :2] - pose[right_shoulder, :2])
-    
-    # Calculate torso center and length to establish a reliable scale minimum
-    torso_center = (pose[left_shoulder, :2] + pose[right_shoulder, :2]) * 0.5
-    torso_length = np.linalg.norm(center - torso_center)
-    
-    # Prevent scaling explosion when facing sideways by ensuring max width
-    scale = max(shoulder_width, torso_length * 0.5)
+
+    # Torso length is the primary scale (canonical in skeleton literature,
+    # matches training-side normalize_pose). Half shoulder-width acts as a
+    # floor so the scale does not collapse when the torso projection shrinks
+    # (e.g., steep forward bend).
+    # `pose` is already hip-centered here, so the hip-centered mid-shoulder
+    # vector IS (mid_shoulder - hip_center) and its norm is the torso length.
+    mid_shoulder = (pose[left_shoulder, :2] + pose[right_shoulder, :2]) * 0.5
+    torso_length = float(np.linalg.norm(mid_shoulder))
+    scale = max(torso_length, shoulder_width * 0.5)
 
     if np.isfinite(scale) and scale > 1e-6:
         pose[:, :2] /= scale

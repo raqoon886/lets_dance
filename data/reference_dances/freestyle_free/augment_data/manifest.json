@@ -1,0 +1,510 @@
+{
+  "dance": "freestyle_free",
+  "source": "data/reference_dances/freestyle_free/reference.npy",
+  "shape": [
+    3600,
+    33,
+    4
+  ],
+  "K": 30,
+  "base_seed": 42,
+  "min_ops": 1,
+  "config": {
+    "flip_p": 0.0,
+    "rot_p": 0.3,
+    "rot_deg": [
+      -10.0,
+      10.0
+    ],
+    "scale_p": 0.3,
+    "scale_range": [
+      0.9,
+      1.1
+    ],
+    "shear_p": 0.3,
+    "shear_range": [
+      -0.08,
+      0.08
+    ],
+    "bone_p": 0.3,
+    "bone_range": [
+      0.95,
+      1.05
+    ],
+    "smooth_p": 0.3,
+    "smooth_sigma": [
+      0.5,
+      1.5
+    ],
+    "drop_p": 0.3,
+    "drop_fraction": [
+      0.02,
+      0.08
+    ],
+    "jitter_p": 0.3,
+    "jitter_sigma": [
+      0.003,
+      0.015
+    ]
+  },
+  "augments": [
+    {
+      "dance": "freestyle_free",
+      "file": "aug_00.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1200634405,
+      "final_seed": 1200634405,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "smooth_sigma": 1.0281804938199954,
+        "jitter_sigma": 0.00794020212062746
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_01.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1906297516,
+      "final_seed": 1906297516,
+      "ops": {
+        "rot_deg": -1.6292305304764128,
+        "scale": 1.077821745286503,
+        "shear": [
+          0.012929320360741223,
+          -0.0715556289883101
+        ]
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_02.npy",
+      "n_ops": 5,
+      "attempts": 1,
+      "initial_seed": 57378406,
+      "final_seed": 57378406,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "scale": 1.093630614616259,
+        "shear": [
+          0.003669977040911168,
+          0.016113314320342076
+        ],
+        "smooth_sigma": 1.4342454975243286,
+        "jitter_sigma": 0.0035372428791702725
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_03.npy",
+      "n_ops": 1,
+      "attempts": 2,
+      "initial_seed": 482933303,
+      "final_seed": 1017023901,
+      "ops": {
+        "shear": [
+          -0.06788772098145927,
+          0.020156437552331832
+        ]
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_04.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 546241254,
+      "final_seed": 546241254,
+      "ops": {
+        "smooth_sigma": 0.8493429720591679,
+        "jitter_sigma": 0.005076945155472999
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_05.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 2005269322,
+      "final_seed": 2005269322,
+      "ops": {
+        "rot_deg": 9.20084714261889,
+        "scale": 1.0947817221541163,
+        "jitter_sigma": 0.01385784565926744
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_06.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 964610618,
+      "final_seed": 964610618,
+      "ops": {
+        "shear": [
+          -0.027994128177050312,
+          -0.011348155446595315
+        ],
+        "smooth_sigma": 1.1013621863062832
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_07.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1298764282,
+      "final_seed": 1298764282,
+      "ops": {
+        "scale": 1.0434348539252905,
+        "smooth_sigma": 1.4907719282479661,
+        "drop_fraction": 0.05292851198064301
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_08.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1513681002,
+      "final_seed": 1513681002,
+      "ops": {
+        "shear": [
+          0.018971440050738947,
+          0.07739297093234952
+        ],
+        "smooth_sigma": 1.4876328865939172,
+        "drop_fraction": 0.03247586809483894
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_09.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1575179550,
+      "final_seed": 1575179550,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "smooth_sigma": 0.9992527707470121
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_10.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 449243483,
+      "final_seed": 449243483,
+      "ops": {
+        "shear": [
+          -0.016793844584092707,
+          -0.07620959275445766
+        ],
+        "drop_fraction": 0.058796218790366256,
+        "jitter_sigma": 0.010872621240582261
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_11.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1679064493,
+      "final_seed": 1679064493,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": 3.0036835513089866,
+        "smooth_sigma": 0.9432649679227946
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_12.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 968619975,
+      "final_seed": 968619975,
+      "ops": {
+        "drop_fraction": 0.026238856441755186,
+        "jitter_sigma": 0.010542866604973479
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_13.npy",
+      "n_ops": 5,
+      "attempts": 1,
+      "initial_seed": 1748329855,
+      "final_seed": 1748329855,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -1.656360290207319,
+        "shear": [
+          0.03969693112994008,
+          -0.0397030564678086
+        ],
+        "drop_fraction": 0.05894406897200434,
+        "jitter_sigma": 0.006335307877623429
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_14.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 8806280,
+      "final_seed": 8806280,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": 8.652760233932288,
+        "jitter_sigma": 0.003931389012109606
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_15.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 756073870,
+      "final_seed": 756073870,
+      "ops": {
+        "jitter_sigma": 0.01481659528550662
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_16.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 542195633,
+      "final_seed": 542195633,
+      "ops": {
+        "rot_deg": 0.5873564593183325,
+        "smooth_sigma": 1.210619740978291
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_17.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1911457118,
+      "final_seed": 1911457118,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": 0.5701320699801968
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_18.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1760841726,
+      "final_seed": 1760841726,
+      "ops": {
+        "rot_deg": -7.36362038703239,
+        "scale": 1.0388783451215735
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_19.npy",
+      "n_ops": 3,
+      "attempts": 2,
+      "initial_seed": 85905284,
+      "final_seed": 773004935,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "scale": 1.041965956094939,
+        "jitter_sigma": 0.012108050683499929
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_20.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1828488996,
+      "final_seed": 1828488996,
+      "ops": {
+        "rot_deg": -5.138415597652877,
+        "scale": 1.0894980893419883
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_21.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 13349408,
+      "final_seed": 13349408,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "drop_fraction": 0.027521946851545895,
+        "jitter_sigma": 0.008069005759602267
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_22.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1549210734,
+      "final_seed": 1549210734,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": 9.975670444367147,
+        "scale": 1.0804920056072376,
+        "shear": [
+          -0.008560279107202876,
+          0.010952994385304754
+        ]
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_23.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 738973453,
+      "final_seed": 738973453,
+      "ops": {
+        "scale": 0.9113483945843334,
+        "shear": [
+          0.025812406828347997,
+          -0.05243620129776046
+        ],
+        "drop_fraction": 0.05512065071919783
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_24.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 767160616,
+      "final_seed": 767160616,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -7.450250838309225
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_25.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 13797316,
+      "final_seed": 13797316,
+      "ops": {
+        "shear": [
+          0.0640548829807752,
+          0.07931431767307705
+        ]
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_26.npy",
+      "n_ops": 4,
+      "attempts": 2,
+      "initial_seed": 540449923,
+      "final_seed": 934445277,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": 7.134292089157267,
+        "scale": 0.9210133453053241,
+        "drop_fraction": 0.05199080758512786
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_27.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1201676368,
+      "final_seed": 1201676368,
+      "ops": {
+        "shear": [
+          0.06227383470568536,
+          -0.04426804622996839
+        ],
+        "smooth_sigma": 0.6254140711287837,
+        "jitter_sigma": 0.009539534058701362
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_28.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1337785013,
+      "final_seed": 1337785013,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "shear": [
+          -0.044429963661191396,
+          0.03323451758018267
+        ]
+      }
+    },
+    {
+      "dance": "freestyle_free",
+      "file": "aug_29.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 2048421574,
+      "final_seed": 2048421574,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "drop_fraction": 0.0675175330346656,
+        "jitter_sigma": 0.008583856015969041
+      }
+    }
+  ]
+}

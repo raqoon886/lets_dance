@@ -1,0 +1,484 @@
+{
+  "dance": "404_dance",
+  "source": "data/reference_dances/404_dance/reference.npy",
+  "shape": [
+    568,
+    33,
+    3
+  ],
+  "K": 30,
+  "base_seed": 42,
+  "min_ops": 1,
+  "config": {
+    "flip_p": 0.0,
+    "rot_p": 0.3,
+    "rot_deg": [
+      -10.0,
+      10.0
+    ],
+    "scale_p": 0.3,
+    "scale_range": [
+      0.9,
+      1.1
+    ],
+    "shear_p": 0.3,
+    "shear_range": [
+      -0.08,
+      0.08
+    ],
+    "bone_p": 0.3,
+    "bone_range": [
+      0.95,
+      1.05
+    ],
+    "smooth_p": 0.3,
+    "smooth_sigma": [
+      0.5,
+      1.5
+    ],
+    "drop_p": 0.3,
+    "drop_fraction": [
+      0.02,
+      0.08
+    ],
+    "jitter_p": 0.3,
+    "jitter_sigma": [
+      0.003,
+      0.015
+    ]
+  },
+  "augments": [
+    {
+      "dance": "404_dance",
+      "file": "aug_00.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1659465400,
+      "final_seed": 1659465400,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "scale": 1.0959850735569652,
+        "shear": [
+          0.024581652279334648,
+          -0.02690759239584034
+        ],
+        "smooth_sigma": 0.7482537729590952
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_01.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 165746615,
+      "final_seed": 165746615,
+      "ops": {
+        "shear": [
+          -0.05828164472874372,
+          -0.058308865416557346
+        ],
+        "jitter_sigma": 0.010708848216351069
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_02.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1421626596,
+      "final_seed": 1421626596,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "jitter_sigma": 0.010397862334638325
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_03.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1592547293,
+      "final_seed": 1592547293,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "scale": 1.0384653442543654,
+        "drop_fraction": 0.03980310733677947,
+        "jitter_sigma": 0.01177147334712483
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_04.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 309773702,
+      "final_seed": 309773702,
+      "ops": {
+        "drop_fraction": 0.06918944137870534
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_05.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 112005620,
+      "final_seed": 112005620,
+      "ops": {
+        "rot_deg": 8.31583979735673,
+        "smooth_sigma": 1.2884315650962987,
+        "drop_fraction": 0.02226615469292997
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_06.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1571105537,
+      "final_seed": 1571105537,
+      "ops": {
+        "rot_deg": 6.679539332054567,
+        "scale": 1.0125586315660469,
+        "smooth_sigma": 0.9280502843634381,
+        "drop_fraction": 0.05790663229166419
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_07.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 507836216,
+      "final_seed": 507836216,
+      "ops": {
+        "rot_deg": 1.0852584779915269,
+        "drop_fraction": 0.07254855182748383,
+        "jitter_sigma": 0.005182356276906486
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_08.npy",
+      "n_ops": 2,
+      "attempts": 2,
+      "initial_seed": 431125006,
+      "final_seed": 1628365203,
+      "ops": {
+        "smooth_sigma": 0.7246016723796102,
+        "drop_fraction": 0.07565627134450315
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_09.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 2060651453,
+      "final_seed": 2060651453,
+      "ops": {
+        "drop_fraction": 0.07963387050202404,
+        "jitter_sigma": 0.013264616177660518
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_10.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 252018341,
+      "final_seed": 252018341,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "scale": 1.0668786886504524,
+        "jitter_sigma": 0.00872271732286142
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_11.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 374862321,
+      "final_seed": 374862321,
+      "ops": {
+        "scale": 1.0763834318133805
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_12.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 2017637055,
+      "final_seed": 2017637055,
+      "ops": {
+        "drop_fraction": 0.037359631162242335
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_13.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 196101016,
+      "final_seed": 196101016,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -4.141545647327147,
+        "smooth_sigma": 1.0474305071644099,
+        "drop_fraction": 0.05135858927952863
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_14.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1216101863,
+      "final_seed": 1216101863,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ]
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_15.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 162878461,
+      "final_seed": 162878461,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -4.310061035597322,
+        "shear": [
+          0.007866716364394274,
+          -0.04968634279316463
+        ],
+        "jitter_sigma": 0.007761970490232888
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_16.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 698272086,
+      "final_seed": 698272086,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -8.266203984712293,
+        "shear": [
+          -0.034700917827866266,
+          -0.033862033010522465
+        ],
+        "jitter_sigma": 0.013772196817901539
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_17.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1260878852,
+      "final_seed": 1260878852,
+      "ops": {
+        "rot_deg": 9.29405708868202,
+        "scale": 0.9279891164759088,
+        "jitter_sigma": 0.011035276634369182
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_18.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1827890157,
+      "final_seed": 1827890157,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "smooth_sigma": 1.4214294303497654
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_19.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1863528602,
+      "final_seed": 1863528602,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "scale": 0.94200808128936,
+        "drop_fraction": 0.03100478874662444
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_20.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 512192749,
+      "final_seed": 512192749,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ]
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_21.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1867583113,
+      "final_seed": 1867583113,
+      "ops": {
+        "rot_deg": -9.552490271568825,
+        "scale": 0.9516327519318516,
+        "drop_fraction": 0.05632759213391747
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_22.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 236554510,
+      "final_seed": 236554510,
+      "ops": {
+        "scale": 0.9051262137498421
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_23.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1378988515,
+      "final_seed": 1378988515,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": 1.521701216144237,
+        "jitter_sigma": 0.005533017582739356
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_24.npy",
+      "n_ops": 3,
+      "attempts": 2,
+      "initial_seed": 10158530,
+      "final_seed": 1282310780,
+      "ops": {
+        "shear": [
+          0.07798033085689741,
+          -0.059829630695423915
+        ],
+        "smooth_sigma": 0.9546046625870722,
+        "drop_fraction": 0.06337558911010974
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_25.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 547026599,
+      "final_seed": 547026599,
+      "ops": {
+        "rot_deg": 7.4083845034383025,
+        "drop_fraction": 0.07512591959991595,
+        "jitter_sigma": 0.010013359822302496
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_26.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1680878638,
+      "final_seed": 1680878638,
+      "ops": {
+        "scale": 0.9633074960679713,
+        "shear": [
+          0.012817808804895886,
+          -0.0781779590775164
+        ],
+        "smooth_sigma": 1.1369116598357425,
+        "drop_fraction": 0.0783377854809226
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_27.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 519541,
+      "final_seed": 519541,
+      "ops": {
+        "smooth_sigma": 0.872898037594062
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_28.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1536998068,
+      "final_seed": 1536998068,
+      "ops": {
+        "rot_deg": 9.98498764781867
+      }
+    },
+    {
+      "dance": "404_dance",
+      "file": "aug_29.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1846736931,
+      "final_seed": 1846736931,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -7.424906967015077
+      }
+    }
+  ]
+}

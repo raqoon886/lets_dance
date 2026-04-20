@@ -1,0 +1,476 @@
+{
+  "dance": "rasputin",
+  "source": "data/reference_dances/rasputin/reference.npy",
+  "shape": [
+    3147,
+    33,
+    3
+  ],
+  "K": 30,
+  "base_seed": 42,
+  "min_ops": 1,
+  "config": {
+    "flip_p": 0.0,
+    "rot_p": 0.3,
+    "rot_deg": [
+      -10.0,
+      10.0
+    ],
+    "scale_p": 0.3,
+    "scale_range": [
+      0.9,
+      1.1
+    ],
+    "shear_p": 0.3,
+    "shear_range": [
+      -0.08,
+      0.08
+    ],
+    "bone_p": 0.3,
+    "bone_range": [
+      0.95,
+      1.05
+    ],
+    "smooth_p": 0.3,
+    "smooth_sigma": [
+      0.5,
+      1.5
+    ],
+    "drop_p": 0.3,
+    "drop_fraction": [
+      0.02,
+      0.08
+    ],
+    "jitter_p": 0.3,
+    "jitter_sigma": [
+      0.003,
+      0.015
+    ]
+  },
+  "augments": [
+    {
+      "dance": "rasputin",
+      "file": "aug_00.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1498460973,
+      "final_seed": 1498460973,
+      "ops": {
+        "shear": [
+          0.0729854079390068,
+          0.07110018286087645
+        ]
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_01.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 901057418,
+      "final_seed": 901057418,
+      "ops": {
+        "shear": [
+          0.03169307536986647,
+          -0.07739482547442053
+        ],
+        "smooth_sigma": 1.430906779791909,
+        "drop_fraction": 0.06015653930716923,
+        "jitter_sigma": 0.009705619337793712
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_02.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 847906917,
+      "final_seed": 847906917,
+      "ops": {
+        "rot_deg": 9.355201415376499,
+        "drop_fraction": 0.069502998491996
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_03.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 648781923,
+      "final_seed": 648781923,
+      "ops": {
+        "rot_deg": -9.492315842878998
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_04.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 2129156816,
+      "final_seed": 2129156816,
+      "ops": {
+        "rot_deg": 4.25949608689859,
+        "scale": 0.9575196772554315,
+        "jitter_sigma": 0.01149159487620664
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_05.npy",
+      "n_ops": 3,
+      "attempts": 2,
+      "initial_seed": 488974326,
+      "final_seed": 1148478999,
+      "ops": {
+        "scale": 0.9500493510091405,
+        "smooth_sigma": 0.6217926262101054,
+        "drop_fraction": 0.02539271469077486
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_06.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 262817921,
+      "final_seed": 262817921,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -1.1102145984504919,
+        "shear": [
+          0.061948225621709554,
+          0.03505472731729284
+        ]
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_07.npy",
+      "n_ops": 5,
+      "attempts": 1,
+      "initial_seed": 920013408,
+      "final_seed": 920013408,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": 3.805711547930459,
+        "scale": 1.0797007005771186,
+        "drop_fraction": 0.02065638076982238,
+        "jitter_sigma": 0.014674848907581958
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_08.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1328636270,
+      "final_seed": 1328636270,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -9.283493511650997,
+        "scale": 1.0175197091841524,
+        "jitter_sigma": 0.01149783670292474
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_09.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1098236208,
+      "final_seed": 1098236208,
+      "ops": {
+        "smooth_sigma": 0.5887676989628428,
+        "jitter_sigma": 0.007710318843317704
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_10.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1585302927,
+      "final_seed": 1585302927,
+      "ops": {
+        "scale": 0.9427298667824281,
+        "smooth_sigma": 1.2860815621530521
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_11.npy",
+      "n_ops": 5,
+      "attempts": 1,
+      "initial_seed": 901040324,
+      "final_seed": 901040324,
+      "ops": {
+        "rot_deg": 5.75577529043686,
+        "scale": 0.9132541366132496,
+        "shear": [
+          -0.00023468107647095504,
+          -0.07783296808660106
+        ],
+        "smooth_sigma": 0.7108904324292501,
+        "jitter_sigma": 0.012710176010561618
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_12.npy",
+      "n_ops": 1,
+      "attempts": 2,
+      "initial_seed": 1186257510,
+      "final_seed": 362092812,
+      "ops": {
+        "jitter_sigma": 0.01487524372428916
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_13.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 898764617,
+      "final_seed": 898764617,
+      "ops": {
+        "smooth_sigma": 1.361443522430533,
+        "drop_fraction": 0.06152007840055214
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_14.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 167754685,
+      "final_seed": 167754685,
+      "ops": {
+        "drop_fraction": 0.0597565542773537
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_15.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 2183175,
+      "final_seed": 2183175,
+      "ops": {
+        "scale": 1.030567126228566,
+        "smooth_sigma": 1.3087867759597862
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_16.npy",
+      "n_ops": 2,
+      "attempts": 2,
+      "initial_seed": 1949046740,
+      "final_seed": 803501156,
+      "ops": {
+        "rot_deg": 1.0783272214781903,
+        "jitter_sigma": 0.01215144296969273
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_17.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1621428200,
+      "final_seed": 1621428200,
+      "ops": {
+        "scale": 1.0320134313300553
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_18.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 203815345,
+      "final_seed": 203815345,
+      "ops": {
+        "rot_deg": -5.794280551037856,
+        "scale": 0.9159161289670654,
+        "jitter_sigma": 0.00423729301835264
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_19.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1724572355,
+      "final_seed": 1724572355,
+      "ops": {
+        "rot_deg": 6.811902639817763,
+        "drop_fraction": 0.0688941459271292,
+        "jitter_sigma": 0.011461174609622541
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_20.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1304437039,
+      "final_seed": 1304437039,
+      "ops": {
+        "rot_deg": -4.420179743155361,
+        "shear": [
+          0.032379963466230774,
+          -0.02331576986585615
+        ],
+        "jitter_sigma": 0.0070818297517039695
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_21.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 2030718096,
+      "final_seed": 2030718096,
+      "ops": {
+        "scale": 1.019432843511006,
+        "shear": [
+          0.004260778654472622,
+          -0.0797583562020903
+        ],
+        "drop_fraction": 0.056598892879476295
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_22.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1328534006,
+      "final_seed": 1328534006,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "scale": 1.0429044826375973
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_23.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 368197203,
+      "final_seed": 368197203,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -2.280522352871759,
+        "scale": 1.0849625342145255
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_24.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1303855393,
+      "final_seed": 1303855393,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -9.991882483428242,
+        "scale": 1.0435688247100792,
+        "jitter_sigma": 0.010326897705672208
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_25.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 195329104,
+      "final_seed": 195329104,
+      "ops": {
+        "shear": [
+          -0.03326333699131128,
+          -0.0074858375242796565
+        ],
+        "jitter_sigma": 0.010194743264642635
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_26.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 385272644,
+      "final_seed": 385272644,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -5.011696534051544,
+        "scale": 0.920436950921726,
+        "shear": [
+          -0.009399141674506423,
+          0.018877542548715848
+        ]
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_27.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 864150474,
+      "final_seed": 864150474,
+      "ops": {
+        "jitter_sigma": 0.009542209888208256
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_28.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1165570489,
+      "final_seed": 1165570489,
+      "ops": {
+        "scale": 0.9822552537987285
+      }
+    },
+    {
+      "dance": "rasputin",
+      "file": "aug_29.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1145775249,
+      "final_seed": 1145775249,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": 3.097915916486187,
+        "jitter_sigma": 0.005365591003184105
+      }
+    }
+  ]
+}
