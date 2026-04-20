@@ -275,6 +275,7 @@ class GameEngine:
                 input_layout=scratch_cfg.get("input_layout", "BTJC"),
                 top_k=scratch_cfg.get("top_k", 3),
                 candidate_stride=scratch_cfg.get("candidate_stride", 3),
+                similarity_threshold=scratch_cfg.get("similarity_threshold", 0.70),
             )
             self._pose_comparator = None
             self._fallback_pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)
@@ -307,6 +308,7 @@ class GameEngine:
                 input_layout=embedding_cfg.get("input_layout", "BTJC"),
                 top_k=embedding_cfg.get("top_k", 3),
                 candidate_stride=embedding_cfg.get("candidate_stride", 3),
+                similarity_threshold=embedding_cfg.get("similarity_threshold", 0.70),
             )
             self._pose_comparator = None
             self._fallback_pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)

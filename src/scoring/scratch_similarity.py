@@ -260,6 +260,7 @@ class ScratchPoseSimilarity:
                     target_joints=self.target_joints,
                     top_k=self.top_k,
                     candidate_stride=self.candidate_stride,
+                    similarity_threshold=self.similarity_threshold,
                 )
                 # 원본 캐시 참조(공유). Python dict 삽입은 Thread-safe
                 temp_encoder._ref_embedding_cache = self._ref_embedding_cache
