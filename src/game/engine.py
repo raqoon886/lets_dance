@@ -401,6 +401,7 @@ class GameEngine:
             b'd':     'K_RIGHT', b'D': 'K_RIGHT',
             b'p':     'K_p',     b'P': 'K_p',
             b'q':     'K_q',     b'Q': 'K_q',
+            b'm':     'K_s',     b'M': 'K_s',
             b'\x03':  'K_q',     # Ctrl+C → 게임 종료
         }
         LINE_MAP = {
@@ -412,6 +413,7 @@ class GameEngine:
             'p':      'K_p',     'pause': 'K_p',
             'q':      'K_q',     'quit':  'K_q',
             'esc':    'K_ESCAPE','escape':'K_ESCAPE',
+            'm':      'K_s',     'screenshot': 'K_s',
         }
 
         def _read_keys():
