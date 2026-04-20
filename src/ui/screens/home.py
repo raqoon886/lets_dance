@@ -43,7 +43,24 @@ class HomeScreen:
         Returns:
             Action string (e.g., 'practice', 'settings') or None
         """
-        # TODO: Handle UP/DOWN navigation, ENTER selection, mouse clicks
+        import pygame
+
+        if not self._buttons:
+            return None
+
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_UP:
+                    self._selected_index = (self._selected_index - 1) % len(self._buttons)
+                elif event.key == pygame.K_DOWN:
+                    self._selected_index = (self._selected_index + 1) % len(self._buttons)
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.app.play_sfx("click")
+                    return self._buttons[self._selected_index]["action"]
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                # TODO: check event.pos against each button's rect when rects are defined
+                self.app.play_sfx("click")
+
         return None
 
     def render(self, display, game_state: dict):

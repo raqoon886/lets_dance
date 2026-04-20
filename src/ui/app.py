@@ -3,6 +3,9 @@ Main UI Application - PyGame-based game interface.
 Manages screen routing, asset loading, and display lifecycle.
 """
 
+import os
+import yaml
+
 
 class App:
     """
@@ -43,7 +46,29 @@ class App:
         # self._fonts["body"] = pygame.font.Font(None, 24)
         # self._images["logo"] = pygame.image.load("assets/images/logo.png")
         # self._images["bg"] = pygame.image.load("assets/images/background.png")
-        pass
+
+        # Read sfx_volume from config
+        sfx_volume = 0.8
+        try:
+            with open("config/settings.yaml", "r") as f:
+                cfg = yaml.safe_load(f) or {}
+            sfx_volume = float(cfg.get("audio", {}).get("sfx_volume", sfx_volume))
+        except Exception:
+            pass
+
+        # Load SFX
+        import pygame
+        sfx_path = os.path.join("assets", "sounds", "click.mp3")
+        if os.path.exists(sfx_path):
+            click_sound = pygame.mixer.Sound(sfx_path)
+            click_sound.set_volume(sfx_volume)
+            self._sounds["click"] = click_sound
+
+    def play_sfx(self, name: str):
+        """Play a sound effect by name. Volume follows audio.sfx_volume in settings.yaml."""
+        sound = self._sounds.get(name)
+        if sound:
+            sound.play()
 
     def _init_screens(self):
         """Initialize all screen objects."""
