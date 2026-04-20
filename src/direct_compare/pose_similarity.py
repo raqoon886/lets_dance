@@ -216,9 +216,10 @@ class PoseSimilarity:
         diff = np.abs(angles_a - angles_b)
         mean_diff = np.mean(diff)
 
-        # 지수 감쇠: 차이가 클수록 급격히 떨어짐
-        # 0° → 1.0, 15° → 0.72, 30° → 0.52, 45° → 0.37, 90° → 0.14
-        similarity = float(np.exp(-2.0 * mean_diff))
+        # 지수 감쇠(Gaussian): 약간의 오차(노이즈)에 대해서는 점수를 높게 보존하고,
+        # 차이가 클수록 급격히 떨어짐. (사람 몸의 자연스러운 오차 허용)
+        # 0° → 1.0, 15°(0.26rad) → 0.81, 30°(0.52rad) → 0.44, 45°(0.78rad) → 0.16
+        similarity = float(np.exp(-3.0 * (mean_diff ** 2)))
         return float(np.clip(similarity, 0.0, 1.0))
 
     def compare_sequence(self, seq_a: list, seq_b: list) -> list:
