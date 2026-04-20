@@ -140,11 +140,38 @@ class GameEngine:
         # SDL이 SIGINT/SIGTERM을 가로채지 않도록 pygame.init() 전에 설정
         os.environ.setdefault("SDL_NO_SIGNAL_HANDLERS", "1")
 
+        # mixer를 pygame.init()보다 먼저 초기화해야 buffer 설정이 적용됨
+        # mono + 버퍼 64 → ~1.5ms 레이턴시 (44100Hz 기준)
+        pygame.mixer.pre_init(44100, -16, 1, 64)
         pygame.init()
-        # 기본 버퍼(4096)는 ~100ms의 레이턴시를 유발하여 영상이 소리에 비해 먼저 나오는 느낌을 줍니다.
-        # 지연을 최소화하기 위해 버퍼를 512로 줄여서 선제 초기화합니다.
-        pygame.mixer.pre_init(44100, -16, 2, 512)
-        pygame.mixer.init()
+
+        # SFX 전용 채널 예약 (0=click, 1=select)
+        pygame.mixer.set_num_channels(16)
+        self._sfx_channel = pygame.mixer.Channel(0)
+        self._sfx_channel_select = pygame.mixer.Channel(1)
+
+        # SFX 로드 — MP3→PCM 사전 변환으로 재생 시 디코딩 오버헤드 제거
+        self._sfx: dict = {}
+        _sfx_volume = float(self.config.get("audio", {}).get("sfx_volume", 0.8))
+        _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+        for _sfx_name in ("click", "select"):
+            _sfx_path = os.path.join(_project_root, "assets", "sounds", f"{_sfx_name}.mp3")
+            if os.path.exists(_sfx_path):
+                _raw = pygame.mixer.Sound(_sfx_path)
+                _pcm_snd = pygame.mixer.Sound(buffer=_raw.get_raw())
+                _pcm_snd.set_volume(_sfx_volume)
+                self._sfx[_sfx_name] = _pcm_snd
+
+        # 무음 재생으로 오디오 파이프라인 워밍업 (첫 재생 지연 방지)
+        if self._sfx:
+            _warmup_snd = next(iter(self._sfx.values()))
+            self._sfx_channel.set_volume(0)
+            self._sfx_channel.play(_warmup_snd)
+            pygame.time.wait(10)
+            self._sfx_channel.stop()
+            self._sfx_channel.set_volume(1.0)
+
         # 키보드 반복 입력: 200ms 후 첫 반복, 이후 80ms 간격
         pygame.key.set_repeat(200, 80)
 
@@ -666,6 +693,9 @@ class GameEngine:
             if not fl:
                 return
             idx = idx % len(fl)
+            # 네비게이션 효과음
+            if "select" in self._sfx:
+                self._sfx_channel_select.play(self._sfx["select"])
             if self.state == GameState.MENU:
                 self._menu_focus_idx = idx
             elif self.state == GameState.SONG_SELECT:
@@ -890,6 +920,10 @@ class GameEngine:
 
     def _on_button_press(self, btn_name: str):
         """버튼 이름에 따라 액션 실행."""
+        # 클릭 효과음 — 전용 채널로 즉시 재생 (이전 재생 즉시 중단)
+        if "click" in self._sfx:
+            self._sfx_channel.play(self._sfx["click"])
+
         # ── 메뉴 화면 버튼 ──
         if btn_name == "btn_practice":
             self._current_mode = "practice"
