@@ -463,11 +463,67 @@ class ScratchPoseSimilarity:
             return None
         return self._precomputed_ref_embeddings[pos]
 
+    # DANCE_JOINTS (12) → COCO 17 joint index mapping
+    # DANCE_JOINTS = [11,12,13,14,15,16,23,24,25,26,27,28] (MediaPipe)
+    # COCO 17:  0=nose,1=Leye,2=Reye,3=Lear,4=Rear,5=Lsho,6=Rsho,
+    #           7=Lelb,8=Relb,9=Lwri,10=Rwri,11=Lhip,12=Rhip,
+    #           13=Lkne,14=Rkne,15=Lank,16=Rank
+    _DANCE_TO_COCO = {
+        0: 5,   # MP11 L_shoulder → COCO5
+        1: 6,   # MP12 R_shoulder → COCO6
+        2: 7,   # MP13 L_elbow    → COCO7
+        3: 8,   # MP14 R_elbow    → COCO8
+        4: 9,   # MP15 L_wrist    → COCO9
+        5: 10,  # MP16 R_wrist    → COCO10
+        6: 11,  # MP23 L_hip      → COCO11
+        7: 12,  # MP24 R_hip      → COCO12
+        8: 13,  # MP25 L_knee     → COCO13
+        9: 14,  # MP26 R_knee     → COCO14
+        10: 15, # MP27 L_ankle    → COCO15
+        11: 16, # MP28 R_ankle    → COCO16
+    }
+
+    def _adapt_for_onnx(self, tensor):
+        """Adapt game-engine tensor [1,T,J_game,C_game] → ONNX [1,3,64,17]."""
+        # tensor shape: [1, T_game, J_game, C_game]  (e.g. [1, 30, 12, 2])
+        x = tensor[0]  # [T_game, J_game, C_game]
+        t_game, j_game, c_game = x.shape
+
+        # 1) Pad channels: 2 → 3 (add zero confidence/z channel)
+        if c_game < 3:
+            pad = np.zeros((t_game, j_game, 3 - c_game), dtype=np.float32)
+            x = np.concatenate([x, pad], axis=-1)  # [T_game, J_game, 3]
+
+        # 2) Map 12 DANCE_JOINTS → 17 COCO joints
+        coco = np.zeros((t_game, 17, 3), dtype=np.float32)
+        for src_idx, dst_idx in self._DANCE_TO_COCO.items():
+            if src_idx < j_game:
+                coco[:, dst_idx, :] = x[:, src_idx, :]
+        # Fill unmapped head joints (0-4) via shoulder midpoint
+        shoulder_mid = (coco[:, 5, :] + coco[:, 6, :]) / 2.0
+        for i in range(5):
+            coco[:, i, :] = shoulder_mid
+
+        # 3) Interpolate time axis: T_game → 64
+        if t_game != 64:
+            src_indices = np.linspace(0, t_game - 1, 64)
+            idx_floor = np.floor(src_indices).astype(int)
+            idx_ceil = np.minimum(idx_floor + 1, t_game - 1)
+            alpha = (src_indices - idx_floor).reshape(64, 1, 1)
+            coco = coco[idx_floor] * (1 - alpha) + coco[idx_ceil] * alpha
+            coco = coco.astype(np.float32)
+        # coco: [64, 17, 3]
+
+        # 4) Transpose TJC → CTJ: [3, 64, 17]
+        out = np.transpose(coco, (2, 0, 1))  # [3, 64, 17]
+        return out[np.newaxis, ...].astype(np.float32)  # [1, 3, 64, 17]
+
     def _infer_single(self, sequence):
         detail = self._input_details[0]
         tensor = self._format_input(sequence)
         
         if getattr(self, "_is_onnx", False):
+            tensor = self._adapt_for_onnx(tensor)
             ort_inputs = {detail["name"]: tensor}
             ort_outs = self._onnx_session.run([self._output_details[0]["name"]], ort_inputs)
             out = ort_outs[0]
