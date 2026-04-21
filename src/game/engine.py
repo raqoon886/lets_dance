@@ -2094,7 +2094,7 @@ class GameEngine:
         self._display.blit(title_surf, title_surf.get_rect(center=(w // 2, MARGIN_TOP + 34)))
 
         sub_color = self._neon_color((230, 160, 255), tick, intensity=0.9)
-        sub = self._fonts["body"].render("* AI DANCE SCORE GAME *", True, sub_color)
+        sub = self._fonts["body"].render("* AI DANCE SCORING GAME *", True, sub_color)
         self._display.blit(sub, sub.get_rect(center=(w // 2, MARGIN_TOP + 76)))
 
         # 구분선
