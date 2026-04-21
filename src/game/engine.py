@@ -1335,7 +1335,14 @@ class GameEngine:
                 # 아직 조건 미충족 → 포즈 감지 계속
                 elif not self._multi_my_pose_ready:
                     self._update_ready()
-                # else: 내 준비 완료, 상대방 대기 중 → 아무것도 안 함
+                else:
+                    # 내 포즈 준비 완료, 상대방 대기 중 → 카메라 프레임만 계속 업데이트
+                    if getattr(self, '_async_camera', None) is not None:
+                        ret, frame, lm, detected, _ = self._async_camera.read()
+                        if ret:
+                            self._ready_current_frame = frame
+                            self._ready_landmarks = lm
+                            self._ready_pose_detected = detected
             else:
                 self._update_ready()
 
@@ -1848,7 +1855,30 @@ class GameEngine:
         elif self.state == GameState.LEADERBOARD:
             self._render_leaderboard(w, h)
 
+        # 멀티플레이 중 상태 배너 (WAITING 화면 제외 — 이미 타이틀이 있음)
+        if self._is_multi_mode and self.state != GameState.WAITING:
+            self._render_multi_status_banner(w)
+
         pygame.display.flip()
+
+    def _render_multi_status_banner(self, w):
+        """멀티플레이 중 화면 우상단에 상태 배너를 표시."""
+        tick = self._neon_tick
+        role_str = self._multi_role.upper() if self._multi_role else "?"
+        opponent_ip = self._multi_opponent_ip or "..."
+        label = f"MULTIPLAY  [{role_str}]  {opponent_ip}"
+        col = self._neon_color((255, 80, 160), tick, 0.7)
+
+        surf = self._fonts["small_retro"].render(label, True, col)
+        bw = surf.get_width() + 16
+        bh = surf.get_height() + 8
+        bx = w - bw - 6
+        by = 4
+        bg_surf = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        bg_surf.fill((20, 8, 35, 180))
+        self._display.blit(bg_surf, (bx, by))
+        pygame.draw.rect(self._display, col, pygame.Rect(bx, by, bw, bh), 1, border_radius=6)
+        self._display.blit(surf, (bx + 8, by + 4))
 
     def _render_waiting(self, w, h):
         """MULTI PLAY 상대방 탐색 중 화면."""
