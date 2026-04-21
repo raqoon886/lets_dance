@@ -8,6 +8,7 @@ import time
 MSG_HELLO        = "HELLO"
 MSG_ACK          = "ACK"
 MSG_SONG_SELECT  = "SONG_SELECT"
+MSG_POSE_READY   = "POSE_READY"    # 양방향: 포즈 감지 3초 완료 알림
 MSG_GAME_START   = "GAME_START"    # HOST → CLIENT: 동시 카운트다운 시작 신호
 MSG_SCORE_UPDATE = "SCORE_UPDATE"
 MSG_GAME_END     = "GAME_END"
