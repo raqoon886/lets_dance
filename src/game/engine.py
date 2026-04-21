@@ -84,6 +84,8 @@ class GameEngine:
         self._leaderboard: list = []        # [{song_id, title, score, grade, mode, date}, ...]
         self._leaderboard_filter: str = ""  # "" = 전체, else song_id
         self._leaderboard_tab: str = "all"  # "all" | "practice" | "challenge" | "freestyle"
+        self._lb_selected_row: int = 0      # 리더보드 컨텐츠 영역에서 선택된 행 인덱스
+        self._lb_confirm_delete = None      # 삭제 확인 대기: "all" | int(행 인덱스) | None
         # 이름 입력 오버레이 (결과 화면 진입 시 표시)
         self._name_input_active: bool = False  # 오버레이 표시 중 여부
         self._name_input_text: str = ""        # 현재 입력 텍스트
@@ -760,8 +762,8 @@ class GameEngine:
             GameState.READY:      ["btn_ready_skip", "btn_ready_cancel"],
             GameState.COUNTDOWN:  ["btn_countdown_cancel"],
             GameState.PLAYING:    ["btn_pause", "btn_gameplay_menu"],
-            # 리더보드: index0=콘텐츠(탭영역), index1=BACK
-            GameState.LEADERBOARD: ["btn_lb_content", "btn_lb_back"],
+            # 리더보드: index0=콘텐츠(탭영역), index1=DELETE ALL, index2=BACK
+            GameState.LEADERBOARD: ["btn_lb_content", "btn_lb_delete_all", "btn_lb_back"],
         }
 
         # SONG_SELECT: depth1=[곡 목록+BACK], depth2=[START 버튼]
@@ -924,19 +926,31 @@ class GameEngine:
                 elif event.key == pygame.K_DOWN:
                     if self.state == GameState.SONG_SELECT and self._song_depth == 2:
                         pass  # depth2에선 ↓ 무시
+                    elif self.state == GameState.LEADERBOARD and self._generic_focus_idx == 0:
+                        # 콘텐츠 포커스: 행 선택 이동
+                        self._lb_selected_row += 1
+                        self._lb_confirm_delete = None
                     else:
                         cnt = _focus_count()
                         if cnt:
                             _set_focus_idx(_get_focus_idx() + 1)
+                        if self.state == GameState.LEADERBOARD:
+                            self._lb_confirm_delete = None
 
                 # ↑ : 이전 항목
                 elif event.key == pygame.K_UP:
                     if self.state == GameState.SONG_SELECT and self._song_depth == 2:
                         self._song_depth = 1   # ↑ → depth1으로 돌아가기
+                    elif self.state == GameState.LEADERBOARD and self._generic_focus_idx == 0:
+                        # 콘텐츠 포커스: 행 선택 이동
+                        self._lb_selected_row = max(0, self._lb_selected_row - 1)
+                        self._lb_confirm_delete = None
                     else:
                         cnt = _focus_count()
                         if cnt:
                             _set_focus_idx(_get_focus_idx() - 1)
+                        if self.state == GameState.LEADERBOARD:
+                            self._lb_confirm_delete = None
 
                 # → : LEADERBOARD=탭 이동(콘텐츠 포커스 시), SETTINGS=볼륨업, 그 외=↓와 동일
                 elif event.key == pygame.K_RIGHT:
@@ -986,9 +1000,12 @@ class GameEngine:
                                 self._on_button_press(focused_btn)   # 곡 하이라이트
                                 self._song_depth = 2
                     elif self.state == GameState.LEADERBOARD:
-                        if self._generic_focus_idx == 1:   # BACK 포커스
+                        if self._generic_focus_idx == 0:  # 콘텐츠 포커스
+                            self._lb_try_delete_selected()
+                        elif self._generic_focus_idx == 1:  # DELETE ALL 포커스
+                            self._lb_try_delete_all()
+                        elif self._generic_focus_idx == 2:  # BACK 포커스
                             self._on_button_press("btn_lb_back")
-                        # index 0 (콘텐츠) 일 때 Enter는 탭 전환 없음
                     else:
                         _press_focused()
 
@@ -3099,12 +3116,13 @@ class GameEngine:
         TABLE_TOP = TAB_TOP + tab_h + 10
 
         # 리더보드 데이터 (탭 필터 적용)
-        entries = list(self._leaderboard)
-        if self._leaderboard_tab != "all":
-            entries = [e for e in entries if e.get("mode", "practice") == self._leaderboard_tab]
-        if self._leaderboard_filter:
-            entries = [e for e in entries if e.get("song_id") == self._leaderboard_filter]
-        entries = sorted(entries, key=lambda e: e.get("score", 0), reverse=True)
+        entries = self._lb_get_filtered_entries()
+
+        # 선택 행 범위 클램프
+        if entries:
+            self._lb_selected_row = min(self._lb_selected_row, len(entries) - 1)
+        else:
+            self._lb_selected_row = 0
 
         # 테이블 헤더
         COL_W = max(50, (w - 40) // 6)
@@ -3121,13 +3139,34 @@ class GameEngine:
         # 엔트리 목록
         ROW_H = 22
         max_rows = max(1, (h - MARGIN_BOTTOM - BTN_H - 20 - TABLE_TOP - 24) // ROW_H)
+        content_focused = (self._generic_focus_idx == 0)
         if not entries:
             empty = self._fonts["small_retro"].render("No records yet!", True, (120, 120, 160))
             self._display.blit(empty, empty.get_rect(center=(w//2, TABLE_TOP + 50)))
         else:
             for ri, entry in enumerate(entries[:max_rows]):
                 ry = TABLE_TOP + 24 + ri * ROW_H
-                row_col = (255, 220, 50) if ri == 0 else (200, 200, 220)
+                is_selected = (content_focused and ri == self._lb_selected_row)
+                is_confirm = (self._lb_confirm_delete == ri)
+
+                # 선택된 행 배경 하이라이트
+                if is_confirm:
+                    row_bg = pygame.Surface((w - 32, ROW_H), pygame.SRCALPHA)
+                    row_bg.fill((180, 40, 40, 120))
+                    self._display.blit(row_bg, (16, ry - 2))
+                elif is_selected:
+                    row_bg = pygame.Surface((w - 32, ROW_H), pygame.SRCALPHA)
+                    row_bg.fill((60, 40, 120, 140))
+                    self._display.blit(row_bg, (16, ry - 2))
+
+                if is_confirm:
+                    row_col = (255, 100, 100)
+                elif ri == 0:
+                    row_col = (255, 220, 50)
+                elif is_selected:
+                    row_col = (180, 220, 255)
+                else:
+                    row_col = (200, 200, 220)
                 player = entry.get("player", "") or "-"
                 vals = [
                     f"#{ri+1}",
@@ -3141,12 +3180,48 @@ class GameEngine:
                     vs = self._fonts["small_retro"].render(val, True, row_col)
                     self._display.blit(vs, (vx, ry))
 
-        # BACK 버튼 — _generic_focus_idx==1 일 때만 강조
+                # 확인 대기 중이면 "press again" 표시
+                if is_confirm:
+                    del_hint = self._fonts["small_retro"].render(
+                        "ENTER to confirm", True, (255, 80, 80))
+                    self._display.blit(del_hint, del_hint.get_rect(
+                        midright=(w - 20, ry + ROW_H // 2)))
+
+        # ── 하단 버튼: DELETE ALL / BACK ──────────────────────────
         mouse_pos = pygame.mouse.get_pos()
-        back_rect = pygame.Rect(w//2 - BTN_W//2, h - MARGIN_BOTTOM - BTN_H + 6, BTN_W, BTN_H)
+        DEL_BTN_W = 160
+        btn_gap = 20
+        total_btn_w = DEL_BTN_W + btn_gap + BTN_W
+        btn_start_x = w // 2 - total_btn_w // 2
+        btn_y = h - MARGIN_BOTTOM - BTN_H + 6
+
+        # DELETE ALL 버튼 — _generic_focus_idx==1
+        del_all_rect = pygame.Rect(btn_start_x, btn_y, DEL_BTN_W, BTN_H)
+        self._btn_rects["btn_lb_delete_all"] = del_all_rect
+        del_hover = del_all_rect.collidepoint(mouse_pos)
+        del_focused = (self._generic_focus_idx == 1)
+        del_confirming = (self._lb_confirm_delete == "all")
+        if del_confirming:
+            del_bg = (180, 30, 30)
+            del_border = self._neon_color((255, 80, 80), tick)
+        elif del_focused:
+            del_bg = (120, 30, 60)
+            del_border = (255, 100, 100)
+        else:
+            del_bg = (60, 20, 35)
+            del_border = (130, 60, 80)
+        pygame.draw.rect(self._display, del_bg, del_all_rect, border_radius=12)
+        pygame.draw.rect(self._display, del_border, del_all_rect, 2 if not del_focused else 3, border_radius=12)
+        del_lbl_text = "[DELETE ALL?]" if del_confirming else "DELETE ALL"
+        del_lbl_col = (255, 255, 255) if (del_focused or del_hover or del_confirming) else (180, 120, 140)
+        del_lbl = self._fonts["btn_retro"].render(del_lbl_text, True, del_lbl_col)
+        self._display.blit(del_lbl, del_lbl.get_rect(center=del_all_rect.center))
+
+        # BACK 버튼 — _generic_focus_idx==2
+        back_rect = pygame.Rect(btn_start_x + DEL_BTN_W + btn_gap, btn_y, BTN_W, BTN_H)
         self._btn_rects["btn_lb_back"] = back_rect
         hover    = back_rect.collidepoint(mouse_pos)
-        focused  = (self._generic_focus_idx == 1)   # BACK이 index1
+        focused  = (self._generic_focus_idx == 2)   # BACK이 index2
         # 배경
         bg_col = (120, 50, 180) if focused else (50, 30, 80)
         pygame.draw.rect(self._display, bg_col, back_rect, border_radius=12)
@@ -3163,7 +3238,7 @@ class GameEngine:
         self._display.blit(lbl, lbl.get_rect(center=back_rect.center))
 
         hint = self._fonts["small_retro"].render(
-            "←/→: SWITCH TAB   ↑/↓: SWITCH TAB   ENTER/SPACE/ESC/B: BACK", True, (120, 110, 160))
+            "←/→: TAB  ↑/↓: SELECT  ENTER: DELETE/CONFIRM  ESC: BACK", True, (120, 110, 160))
         self._display.blit(hint, hint.get_rect(center=(w//2, h - 22)))
 
     def _render_settings(self, w, h):
@@ -3423,6 +3498,8 @@ class GameEngine:
         elif state == GameState.LEADERBOARD:
             self._leaderboard_load()
             self._generic_focus_idx = 0
+            self._lb_selected_row = 0
+            self._lb_confirm_delete = None
 
     def _play_song_preview(self, song: dict):
         """곡 선택 시 오디오 미리듣기."""
@@ -3524,6 +3601,61 @@ class GameEngine:
         records.append(entry)
         # 점수 높은 순으로 정렬 후 최대 200개 유지
         records = sorted(records, key=lambda e: e.get("score", 0), reverse=True)[:200]
+        try:
+            with open(lb_path, "w", encoding="utf-8") as f:
+                json.dump(records, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[WARN] 리더보드 저장 실패: {e}")
+
+    def _lb_get_filtered_entries(self) -> list:
+        """현재 탭/필터에 맞는 리더보드 엔트리를 점수 내림차순으로 반환."""
+        entries = list(self._leaderboard)
+        if self._leaderboard_tab != "all":
+            entries = [e for e in entries if e.get("mode", "practice") == self._leaderboard_tab]
+        if self._leaderboard_filter:
+            entries = [e for e in entries if e.get("song_id") == self._leaderboard_filter]
+        return sorted(entries, key=lambda e: e.get("score", 0), reverse=True)
+
+    def _lb_try_delete_selected(self):
+        """콘텐츠 포커스에서 Enter/Space → 선택된 행 삭제 (확인 절차)."""
+        entries = self._lb_get_filtered_entries()
+        if not entries:
+            return
+        row = min(self._lb_selected_row, len(entries) - 1)
+        if self._lb_confirm_delete == row:
+            # 두 번째 누름 → 실제 삭제
+            target = entries[row]
+            try:
+                self._leaderboard.remove(target)
+            except ValueError:
+                pass
+            self._leaderboard_save_all()
+            self._lb_confirm_delete = None
+            if self._lb_selected_row >= len(self._lb_get_filtered_entries()):
+                self._lb_selected_row = max(0, self._lb_selected_row - 1)
+        else:
+            self._lb_confirm_delete = row
+
+    def _lb_try_delete_all(self):
+        """DELETE ALL 버튼 → 전체 삭제 (확인 절차)."""
+        if self._lb_confirm_delete == "all":
+            # 두 번째 누름 → 실제 전체 삭제
+            if self._leaderboard_tab == "all":
+                self._leaderboard.clear()
+            else:
+                self._leaderboard = [e for e in self._leaderboard
+                                     if e.get("mode", "practice") != self._leaderboard_tab]
+            self._leaderboard_save_all()
+            self._lb_confirm_delete = None
+            self._lb_selected_row = 0
+        else:
+            self._lb_confirm_delete = "all"
+
+    def _leaderboard_save_all(self):
+        """현재 self._leaderboard 전체를 파일에 저장."""
+        lb_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "leaderboard.json")
+        lb_path = os.path.normpath(lb_path)
+        records = sorted(self._leaderboard, key=lambda e: e.get("score", 0), reverse=True)[:200]
         try:
             with open(lb_path, "w", encoding="utf-8") as f:
                 json.dump(records, f, ensure_ascii=False, indent=2)
