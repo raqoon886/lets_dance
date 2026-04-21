@@ -8,6 +8,7 @@ import os
 import json
 import signal
 import subprocess
+from datetime import datetime
 
 import pygame
 import cv2
@@ -131,6 +132,13 @@ class GameEngine:
         self._particles: list = []           # [{'x','y','vx','vy','life','max_life','color','size'}]
         # 피드백 등장 후 경과 시간 (판정 애니메이션 progress 계산용)
         self._feedback_age: float = 0.0      # 현재 피드백이 표시된 후 흐른 시간(초)
+        # 점수 추적 로그(JSONL)
+        self._score_trace_enabled: bool = True
+        self._score_trace_dir: str = "data/logs/score_traces"
+        self._score_trace_file = None
+        self._score_trace_path: str = ""
+        self._last_similarity_debug = None
+        self._last_terminal_similarity = None
 
     def initialize(self):
         """
@@ -241,6 +249,13 @@ class GameEngine:
         self._fallback_similarity_method = smoothing_cfg.get(
             "fallback_similarity", self.config.get("similarity_method", "angle"))
 
+        logging_cfg = self.config.get("logging", {})
+        score_trace_cfg = logging_cfg.get("score_trace", {})
+        if isinstance(score_trace_cfg, bool):
+            score_trace_cfg = {"enabled": score_trace_cfg}
+        self._score_trace_enabled = bool(score_trace_cfg.get("enabled", True))
+        self._score_trace_dir = str(score_trace_cfg.get("dir", "data/logs/score_traces"))
+
         # Pose similarity comparator
         from direct_compare.pose_similarity import PoseSimilarity
         self._score_method = self.config.get("score_method", "direct")
@@ -275,6 +290,7 @@ class GameEngine:
                 input_layout=scratch_cfg.get("input_layout", "BTJC"),
                 top_k=scratch_cfg.get("top_k", 3),
                 candidate_stride=scratch_cfg.get("candidate_stride", 3),
+                similarity_threshold=scratch_cfg.get("similarity_threshold", 0.70),
             )
             self._pose_comparator = None
             self._fallback_pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)
@@ -307,6 +323,7 @@ class GameEngine:
                 input_layout=embedding_cfg.get("input_layout", "BTJC"),
                 top_k=embedding_cfg.get("top_k", 3),
                 candidate_stride=embedding_cfg.get("candidate_stride", 3),
+                similarity_threshold=embedding_cfg.get("similarity_threshold", 0.70),
             )
             self._pose_comparator = None
             self._fallback_pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)
@@ -1078,6 +1095,143 @@ class GameEngine:
             return 0.0
         return max(0.0, float(self._timing_offset_max_penalty))
 
+    @staticmethod
+    def _sanitize_log_token(value):
+        token = str(value or "unknown").strip()
+        safe = []
+        for ch in token:
+            safe.append(ch if ch.isalnum() or ch in ("-", "_") else "_")
+        return "".join(safe).strip("_") or "unknown"
+
+    def _resolve_project_root(self):
+        return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    @staticmethod
+    def _landmarks_to_list(landmarks):
+        if landmarks is None:
+            return None
+        import numpy as np
+
+        arr = np.asarray(landmarks, dtype=np.float32)
+        return np.round(arr, 6).tolist()
+
+    def _open_score_trace_log(self):
+        if not self._score_trace_enabled:
+            return
+        self._close_score_trace_log()
+
+        project_root = self._resolve_project_root()
+        log_dir = self._score_trace_dir
+        if not os.path.isabs(log_dir):
+            log_dir = os.path.join(project_root, log_dir)
+        os.makedirs(log_dir, exist_ok=True)
+
+        song = self._current_song or {}
+        song_id = self._sanitize_log_token(
+            song.get("id") or song.get("title") or os.path.basename(song.get("path", "")) or "song"
+        )
+        mode = self._sanitize_log_token(self._current_mode or "unknown")
+        started_at = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._score_trace_path = os.path.join(
+            log_dir, f"score_trace_{song_id}_{mode}_{started_at}.jsonl"
+        )
+        self._score_trace_file = open(self._score_trace_path, "a", encoding="utf-8")
+        print(f"[INFO] Score trace logging -> {self._score_trace_path}")
+
+    def _close_score_trace_log(self):
+        if self._score_trace_file is None:
+            return
+        try:
+            self._score_trace_file.flush()
+            self._score_trace_file.close()
+        except Exception:
+            pass
+        self._score_trace_file = None
+
+    def _debug_info_for_score_source(self, score_source):
+        if score_source in ("scratch", "scratch_cache"):
+            return dict(getattr(self._scratch_comparator, "_last_debug_info", None) or {})
+        if score_source in ("embedding", "embedding_cache"):
+            return dict(getattr(self._embedding_comparator, "_last_debug_info", None) or {})
+        if score_source in ("direct", "scratch_fallback_direct", "embedding_fallback_direct"):
+            return dict(self._last_similarity_debug or {})
+        if score_source == "missing_pose_penalty":
+            return {"current_reference_index": int(self._ref_current_idx)}
+        return {}
+
+    def _write_score_trace(self, similarity, evaluation, user_landmarks, score_source):
+        if not self._score_trace_enabled or self._score_trace_file is None:
+            return
+
+        debug_info = self._debug_info_for_score_source(score_source)
+        similarity_metric = debug_info.get("method")
+        if not similarity_metric:
+            if score_source in ("scratch", "scratch_cache", "embedding", "embedding_cache"):
+                similarity_metric = "cosine"
+            elif score_source in ("scratch_fallback_direct", "embedding_fallback_direct"):
+                similarity_metric = self._fallback_similarity_method
+            elif score_source == "missing_pose_penalty":
+                similarity_metric = "penalty"
+            else:
+                similarity_metric = self._similarity_method
+        current_reference_index = debug_info.get("current_reference_index")
+        if current_reference_index is None and self._ref_frame_landmarks is not None:
+            current_reference_index = int(self._ref_current_idx)
+
+        matched_reference_index = (
+            debug_info.get("best_candidate_index")
+            if debug_info.get("best_candidate_index") is not None
+            else debug_info.get("best_reference_index")
+        )
+
+        matched_reference_landmarks = None
+        if (
+            matched_reference_index is not None
+            and self._ref_landmarks is not None
+            and 0 <= int(matched_reference_index) < len(self._ref_landmarks)
+        ):
+            matched_reference_landmarks = self._ref_landmarks[int(matched_reference_index)]
+
+        record = {
+            "event": "score_tick",
+            "logged_at": datetime.now().isoformat(timespec="milliseconds"),
+            "song_id": (self._current_song or {}).get("id"),
+            "song_title": (self._current_song or {}).get("title"),
+            "mode": self._current_mode,
+            "state": self.state,
+            "score_method": self._score_method,
+            "score_source": score_source,
+            "similarity_metric": similarity_metric,
+            "similarity": float(similarity),
+            "evaluation": evaluation,
+            "elapsed_time_sec": round(
+                float(getattr(self._current_session, "elapsed_time", 0.0) or 0.0), 3
+            ),
+            "reference_index_current": (
+                int(current_reference_index) if current_reference_index is not None else None
+            ),
+            "reference_index_matched": (
+                int(matched_reference_index) if matched_reference_index is not None else None
+            ),
+            "user_landmarks": self._landmarks_to_list(user_landmarks),
+            "reference_landmarks_current": self._landmarks_to_list(self._ref_frame_landmarks),
+            "reference_landmarks_matched": self._landmarks_to_list(matched_reference_landmarks),
+            "similarity_debug": debug_info,
+        }
+
+        try:
+            self._score_trace_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+            self._score_trace_file.flush()
+        except Exception as exc:
+            print(f"[WARN] Score trace write failed: {exc}")
+
+    def _print_terminal_similarity(self, similarity):
+        try:
+            self._last_terminal_similarity = float(similarity)
+            print(f"\rSIM {self._last_terminal_similarity:.3f}", end="", flush=True)
+        except Exception:
+            pass
+
     def _should_apply_missing_pose_penalty(self):
         """Return True when a scoring tick should count as a Miss for no pose."""
         if not self._missing_pose_penalty_enabled:
@@ -1112,7 +1266,7 @@ class GameEngine:
         start_idx = max(0, self._ref_current_idx - tolerance_frames)
         end_idx = self._ref_current_idx + 1
 
-        best_sims = []
+        scored_candidates = []
         timing_penalty = self._timing_penalty_value()
         for ri in range(start_idx, end_idx):
             ref_lm = self._ref_landmarks[ri]
@@ -1120,20 +1274,32 @@ class GameEngine:
             if timing_penalty > 0.0 and tolerance_frames > 0:
                 offset = abs(self._ref_current_idx - ri)
                 sim -= timing_penalty * min(offset / tolerance_frames, 1.0)
-            best_sims.append(float(max(0.0, min(1.0, sim))))
-        if not best_sims:
+            scored_candidates.append((int(ri), float(max(0.0, min(1.0, sim)))))
+        if not scored_candidates:
+            self._last_similarity_debug = None
             return None
 
-        best_sims.sort(reverse=True)
-        top_k = best_sims[:min(3, len(best_sims))]
-        sim = sum(top_k) / len(top_k)
+        scored_candidates.sort(key=lambda item: item[1], reverse=True)
+        top_k = scored_candidates[:min(3, len(scored_candidates))]
+        sim = sum(score for _, score in top_k) / len(top_k)
+        self._last_similarity_debug = {
+            "method": method,
+            "current_reference_index": int(self._ref_current_idx),
+            "best_reference_index": int(top_k[0][0]),
+            "best_reference_similarity": float(top_k[0][1]),
+            "top_candidates": [
+                {"reference_index": int(idx), "similarity": float(score)}
+                for idx, score in top_k
+            ],
+            "returned_similarity": float(sim),
+        }
 
         if debug:
             sim_now = self._pose_similarity_with_method(
                 comparator, user_landmarks, self._ref_frame_landmarks, method)
             print(
                 f"\r[DBG] now={sim_now:.3f} top3={sim:.3f} "
-                f"max={best_sims[0]:.3f} win={end_idx-start_idx}f",
+                f"max={top_k[0][1]:.3f} win={end_idx-start_idx}f",
                 end="",
             )
         return sim
@@ -1193,6 +1359,7 @@ class GameEngine:
         #   매 프레임: buffer_frame()으로 포즈 버퍼 축적
         #   N프레임마다: compute_from_buffer()로 모델 추론 + 점수 산출
         sim = None
+        score_source = None
         if self._current_mode != "freestyle":
             if scoring_landmarks is not None:
                 # ── 매 프레임: 버퍼 축적 ──
@@ -1205,17 +1372,20 @@ class GameEngine:
             self._scoring_frame_counter += 1
             if self._scoring_frame_counter >= self._scoring_interval:
                 self._scoring_frame_counter = 0
+                self._last_similarity_debug = None
 
                 if self._ref_frame_landmarks is not None:
                     if scoring_landmarks is None:
                         if self._should_apply_missing_pose_penalty():
                             sim = self._missing_pose_similarity
+                            score_source = "missing_pose_penalty"
                     elif self._score_method == "direct":
                         sim = self._direct_window_similarity(
                             scoring_landmarks,
                             method=self._similarity_method,
                             debug=True,
                         )
+                        score_source = "direct"
                     elif self._score_method == "scratch":
                         tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
                         sim = self._scratch_comparator.compute_from_buffer(
@@ -1224,11 +1394,15 @@ class GameEngine:
                             tolerance_frames=tolerance_frames,
                             timing_penalty=self._timing_penalty_value(),
                         )
+                        if sim is not None:
+                            score_source = "scratch"
                         if sim is None and self._model_warmup_direct_fallback:
                             sim = self._direct_window_similarity(
                                 scoring_landmarks,
                                 method=self._fallback_similarity_method,
                             )
+                            if sim is not None:
+                                score_source = "scratch_fallback_direct"
                     else:
                         tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
                         sim = self._embedding_comparator.compute_from_buffer(
@@ -1237,11 +1411,15 @@ class GameEngine:
                             tolerance_frames=tolerance_frames,
                             timing_penalty=self._timing_penalty_value(),
                         )
+                        if sim is not None:
+                            score_source = "embedding"
                         if sim is None and self._model_warmup_direct_fallback:
                             sim = self._direct_window_similarity(
                                 scoring_landmarks,
                                 method=self._fallback_similarity_method,
                             )
+                            if sim is not None:
+                                score_source = "embedding_fallback_direct"
                 else:
                     if scoring_landmarks is None:
                         pass
@@ -1255,7 +1433,10 @@ class GameEngine:
                         sim = min(float(np.mean(visible)), 1.0) if len(visible) else 0.0
 
         if sim is not None:
+            if self._score_method != "direct":
+                self._print_terminal_similarity(sim)
             evaluation = self._scorer.evaluate(sim)
+            self._write_score_trace(sim, evaluation, scoring_landmarks, score_source or "unknown")
             fb = self._feedback_gen.generate(evaluation)
             if fb:
                 self._last_feedback = fb
@@ -2841,12 +3022,14 @@ class GameEngine:
         self._feedback_age = 0.0
 
         if state == GameState.MENU:
+            self._close_score_trace_log()
             self._menu_focus_idx = 0
             # 게임 중 메뉴로 돌아오면 음악 정지
             if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
                 pygame.mixer.music.stop()
             self._release_reference_assets()
         elif state == GameState.SONG_SELECT:
+            self._close_score_trace_log()
             self._selected_song_idx = 0
             self._song_focus_idx = 0
             self._song_depth = 1            # 곡 선택 창 진입 시 항상 depth1로 초기화
@@ -2876,6 +3059,8 @@ class GameEngine:
             if resuming_from_pause:
                 pygame.mixer.music.unpause()
             else:
+                if self._current_mode != "freestyle":
+                    self._open_score_trace_log()
                 # 새 게임 시작: 이전 세션 완전 정리
                 if self._current_session is not None:
                     self._current_session.is_active = False
@@ -2937,6 +3122,7 @@ class GameEngine:
             # 일시정지 — 현재 세션 타이머는 계속 흐름 (추후 개선 가능)
             pygame.mixer.music.pause()
         elif state == GameState.RESULT:
+            self._close_score_trace_log()
             self._result_data = self._scorer.get_final_result()
             # 리더보드에 결과 저장 (프리스타일은 저장 안 함)
             if self._current_mode != "freestyle":
@@ -3214,6 +3400,7 @@ class GameEngine:
             return
         self._shutdown_done = True
         self.running = False
+        self._close_score_trace_log()
         if getattr(self, '_async_camera', None) is not None:
             self._async_camera.stop()
         if getattr(self, '_async_video_player', None):

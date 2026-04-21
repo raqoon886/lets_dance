@@ -1,0 +1,487 @@
+{
+  "dance": "kpop_basic",
+  "source": "data/reference_dances/kpop_basic/reference.npy",
+  "shape": [
+    7164,
+    33,
+    3
+  ],
+  "K": 30,
+  "base_seed": 42,
+  "min_ops": 1,
+  "config": {
+    "flip_p": 0.0,
+    "rot_p": 0.3,
+    "rot_deg": [
+      -10.0,
+      10.0
+    ],
+    "scale_p": 0.3,
+    "scale_range": [
+      0.9,
+      1.1
+    ],
+    "shear_p": 0.3,
+    "shear_range": [
+      -0.08,
+      0.08
+    ],
+    "bone_p": 0.3,
+    "bone_range": [
+      0.95,
+      1.05
+    ],
+    "smooth_p": 0.3,
+    "smooth_sigma": [
+      0.5,
+      1.5
+    ],
+    "drop_p": 0.3,
+    "drop_fraction": [
+      0.02,
+      0.08
+    ],
+    "jitter_p": 0.3,
+    "jitter_sigma": [
+      0.003,
+      0.015
+    ]
+  },
+  "augments": [
+    {
+      "dance": "kpop_basic",
+      "file": "aug_00.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 197351176,
+      "final_seed": 197351176,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "smooth_sigma": 1.3278317226484497,
+        "drop_fraction": 0.05852073744575806
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_01.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 479634283,
+      "final_seed": 479634283,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": 7.98528582494777
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_02.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 393017568,
+      "final_seed": 393017568,
+      "ops": {
+        "shear": [
+          0.0032805535222419774,
+          -0.0281164648838654
+        ],
+        "smooth_sigma": 0.6987748718156384
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_03.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1446837990,
+      "final_seed": 1446837990,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "shear": [
+          -0.03773285874543241,
+          0.04976842079370346
+        ]
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_04.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1350195096,
+      "final_seed": 1350195096,
+      "ops": {
+        "scale": 0.9112729680496987,
+        "smooth_sigma": 0.6020702524347762
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_05.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 967096734,
+      "final_seed": 967096734,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "shear": [
+          0.019493824359803777,
+          -0.07256672849327775
+        ],
+        "jitter_sigma": 0.007385758787247906
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_06.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1138417713,
+      "final_seed": 1138417713,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "drop_fraction": 0.06518392338658159
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_07.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1298400672,
+      "final_seed": 1298400672,
+      "ops": {
+        "scale": 0.9683562336905026
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_08.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1989877192,
+      "final_seed": 1989877192,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ]
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_09.npy",
+      "n_ops": 2,
+      "attempts": 2,
+      "initial_seed": 1943263643,
+      "final_seed": 818703086,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "smooth_sigma": 1.270382758312954
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_10.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 800666038,
+      "final_seed": 800666038,
+      "ops": {
+        "scale": 1.0698146310427683
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_11.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 570415989,
+      "final_seed": 570415989,
+      "ops": {
+        "rot_deg": 3.3082611093531415,
+        "scale": 1.091510879586911
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_12.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1687820302,
+      "final_seed": 1687820302,
+      "ops": {
+        "scale": 1.0118179985239315,
+        "smooth_sigma": 0.8916901852199025,
+        "drop_fraction": 0.07009087701816719
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_13.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1562960337,
+      "final_seed": 1562960337,
+      "ops": {
+        "rot_deg": -9.328431366151351,
+        "smooth_sigma": 0.8193461146145418
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_14.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 54685304,
+      "final_seed": 54685304,
+      "ops": {
+        "shear": [
+          0.000386001801922331,
+          -0.002140084379993079
+        ],
+        "jitter_sigma": 0.013172011934884351
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_15.npy",
+      "n_ops": 2,
+      "attempts": 2,
+      "initial_seed": 2031969232,
+      "final_seed": 149166029,
+      "ops": {
+        "shear": [
+          0.019104198919333973,
+          -0.01512848673042505
+        ],
+        "jitter_sigma": 0.011806743401144779
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_16.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 118179596,
+      "final_seed": 118179596,
+      "ops": {
+        "drop_fraction": 0.07972624201832335,
+        "jitter_sigma": 0.010068853897481668
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_17.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 374556714,
+      "final_seed": 374556714,
+      "ops": {
+        "rot_deg": 8.036055027225096
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_18.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1526869810,
+      "final_seed": 1526869810,
+      "ops": {
+        "smooth_sigma": 1.3328445025755409,
+        "drop_fraction": 0.06306446613771577
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_19.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1132101256,
+      "final_seed": 1132101256,
+      "ops": {
+        "scale": 1.0277670427832155,
+        "drop_fraction": 0.059630801409355574
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_20.npy",
+      "n_ops": 1,
+      "attempts": 2,
+      "initial_seed": 35711780,
+      "final_seed": 1195648592,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ]
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_21.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1149098579,
+      "final_seed": 1149098579,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "scale": 0.9638470656512347,
+        "shear": [
+          -0.054044839536149705,
+          -0.05367491599588581
+        ],
+        "drop_fraction": 0.024728016513371576
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_22.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 603025600,
+      "final_seed": 603025600,
+      "ops": {
+        "shear": [
+          -0.02308101314520812,
+          0.02411815938652309
+        ],
+        "smooth_sigma": 0.6609714126326477
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_23.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1479987025,
+      "final_seed": 1479987025,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "smooth_sigma": 1.4455824110753834,
+        "jitter_sigma": 0.0073677542298638855
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_24.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 708027223,
+      "final_seed": 708027223,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -8.458475833958213,
+        "shear": [
+          -0.041274736786609804,
+          0.01734401958817018
+        ]
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_25.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 276643105,
+      "final_seed": 276643105,
+      "ops": {
+        "shear": [
+          0.004987141497913364,
+          -0.06922914193049477
+        ],
+        "smooth_sigma": 1.2818549012312768,
+        "drop_fraction": 0.06869214316111795
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_26.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1723634452,
+      "final_seed": 1723634452,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "scale": 0.9891908307008656,
+        "jitter_sigma": 0.006398142945142499
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_27.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1922587036,
+      "final_seed": 1922587036,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "smooth_sigma": 1.0920985599154214
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_28.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 305057899,
+      "final_seed": 305057899,
+      "ops": {
+        "rot_deg": 7.644130869338603,
+        "scale": 1.0419683756553737,
+        "jitter_sigma": 0.013707733189672496
+      }
+    },
+    {
+      "dance": "kpop_basic",
+      "file": "aug_29.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1367664613,
+      "final_seed": 1367664613,
+      "ops": {
+        "rot_deg": 0.8645221487553023,
+        "shear": [
+          -0.01565811237976117,
+          0.00067690321069655
+        ],
+        "drop_fraction": 0.04207620457877445
+      }
+    }
+  ]
+}
