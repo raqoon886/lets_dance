@@ -8,7 +8,7 @@ import time
 from .protocol import (
     make_msg, parse_msg,
     MSG_SCORE_UPDATE, MSG_GAME_END, MSG_DISCONNECT, MSG_HEARTBEAT,
-    MSG_SONG_SELECT, MSG_GAME_START,
+    MSG_SONG_SELECT, MSG_GAME_START, MSG_POSE_READY,
     GAME_PORT,
 )
 
@@ -47,8 +47,9 @@ class GameSocket:
         # optional callbacks (called from recv thread)
         self.on_disconnect = None
         self.on_opponent_finish = None
-        self.on_song_select = None    # (song_id: str)
-        self.on_game_start  = None    # () — CLIENT가 HOST의 시작 신호 수신 시
+        self.on_song_select = None         # (song_id: str, mode: str)
+        self.on_game_start  = None         # () — CLIENT가 HOST의 시작 신호 수신 시
+        self.on_opponent_pose_ready = None # () — 상대방 포즈 감지 3초 완료 알림
 
     # ─── public API ──────────────────────────────────────────────────────────
 
@@ -79,6 +80,10 @@ class GameSocket:
     def send_song(self, song_id: str, mode: str = "practice"):
         """HOST가 선택한 곡 ID와 모드를 CLIENT에 전송."""
         self._send(make_msg(MSG_SONG_SELECT, song_id=song_id, mode=mode))
+
+    def send_pose_ready(self):
+        """포즈 감지 3초 완료 알림을 상대방에게 전송 (HOST/CLIENT 모두 사용)."""
+        self._send(make_msg(MSG_POSE_READY))
 
     def send_start(self):
         """HOST가 카운트다운 시작 신호를 CLIENT에 전송."""
@@ -140,6 +145,10 @@ class GameSocket:
                 mode    = str(msg.get("mode", "practice"))
                 if song_id and self.on_song_select:
                     self.on_song_select(song_id, mode)
+
+            elif mtype == MSG_POSE_READY:
+                if self.on_opponent_pose_ready:
+                    self.on_opponent_pose_ready()
 
             elif mtype == MSG_GAME_START:
                 if self.on_game_start:
