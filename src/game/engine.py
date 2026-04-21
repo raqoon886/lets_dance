@@ -1426,13 +1426,14 @@ class GameEngine:
         if getattr(self, '_async_camera', None) is None:
             return
 
-        ret, frame, lm, detected = self._async_camera.read()
+        ret, frame, lm, detected, seq = self._async_camera.read()
         if not ret:
             return
 
         self._current_frame = frame
         self._current_landmarks = lm
         self._pose_detected = detected
+        self._current_frame_seq = seq
 
         scoring_landmarks = None
         if self._pose_detected and self._current_landmarks is not None:
