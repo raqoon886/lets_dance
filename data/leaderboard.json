@@ -44,74 +44,112 @@
     "date": "2026-04-16 14:52"
   },
   {
-    "song_id": "basic_movement",
-    "title": "Basic Movement",
-    "player": "hwanhee",
-    "score": 1240.8,
+    "song_id": "cheerup_dance",
+    "title": "Cheer Up",
+    "score": 18819.6,
     "grade": "OK",
-    "mode": "practice",
-    "date": "2026-04-21 10:00"
+    "mode": "challenge",
+    "date": "2026-04-16 16:52"
+  },
+  {
+    "song_id": "hiphop_move",
+    "title": "Breaking Dance!",
+    "score": 14269.4,
+    "grade": "Good",
+    "date": "2026-04-16 14:21"
+  },
+  {
+    "song_id": "404_dance",
+    "title": "404 New Era",
+    "score": 8012.8,
+    "grade": "Miss",
+    "date": "2026-04-16 14:30"
+  },
+  {
+    "song_id": "404_dance",
+    "title": "404 New Era",
+    "score": 7836.6,
+    "grade": "Miss",
+    "date": "2026-04-16 14:24"
+  },
+  {
+    "song_id": "404_dance",
+    "title": "404 New Era",
+    "score": 7594.6,
+    "grade": "Miss",
+    "date": "2026-04-16 14:16"
   },
   {
     "song_id": "cheerup_dance",
     "title": "Cheer Up",
-    "score": 322.5,
-    "grade": "Miss",
+    "score": 18819.6,
+    "grade": "OK",
     "mode": "challenge",
-    "date": "2026-04-16 14:51"
+    "date": "2026-04-16 16:52"
   },
   {
-    "song_id": "basic_movement",
-    "title": "Basic Movement",
-    "player": "hwanhee",
-    "score": 47.7,
-    "grade": "Miss",
-    "mode": "practice",
-    "date": "2026-04-20 16:02"
+    "song_id": "hiphop_move",
+    "title": "Breaking Dance!",
+    "score": 14269.4,
+    "grade": "Good",
+    "date": "2026-04-16 14:21"
   },
   {
-    "song_id": "basic_movement",
-    "title": "Basic Movement",
-    "player": "",
-    "score": 0.0,
+    "song_id": "404_dance",
+    "title": "404 New Era",
+    "score": 8012.8,
     "grade": "Miss",
-    "mode": "practice",
-    "date": "2026-04-20 17:09"
+    "date": "2026-04-16 14:30"
   },
   {
-    "song_id": "basic_movement",
-    "title": "Basic Movement",
-    "player": "hwanhee",
-    "score": 0.0,
+    "song_id": "404_dance",
+    "title": "404 New Era",
+    "score": 7836.6,
     "grade": "Miss",
-    "mode": "practice",
-    "date": "2026-04-21 09:32"
+    "date": "2026-04-16 14:24"
   },
   {
-    "song_id": "basic_movement",
-    "title": "Basic Movement",
-    "player": "",
-    "score": 0.0,
+    "song_id": "404_dance",
+    "title": "404 New Era",
+    "score": 7594.6,
     "grade": "Miss",
-    "mode": "practice",
-    "date": "2026-04-21 09:37"
+    "date": "2026-04-16 14:16"
   },
   {
-    "song_id": "basic_movement",
-    "title": "Basic Movement",
-    "player": "",
-    "score": 0.0,
-    "grade": "Miss",
-    "mode": "practice",
-    "date": "2026-04-21 09:43"
+    "song_id": "cheerup_dance",
+    "title": "Cheer Up",
+    "score": 18819.6,
+    "grade": "OK",
+    "mode": "challenge",
+    "date": "2026-04-16 16:52"
   },
   {
-    "song_id": "basic_movement",
-    "title": "Basic Movement",
-    "player": "",
-    "score": 0.0,
+    "song_id": "hiphop_move",
+    "title": "Breaking Dance!",
+    "score": 14269.4,
+    "grade": "Good",
+    "date": "2026-04-16 14:21"
+  },
+  {
+    "song_id": "404_dance",
+    "title": "404 New Era",
+    "score": 8012.8,
     "grade": "Miss",
-    "mode": "practice",
-    "date": "2026-04-21 09:46"
+    "date": "2026-04-16 14:30"
+  },
+  {
+    "song_id": "404_dance",
+    "title": "404 New Era",
+    "score": 7836.6,
+    "grade": "Miss",
+    "date": "2026-04-16 14:24"
+  },
+  {
+    "song_id": "404_dance",
+    "title": "404 New Era",
+    "score": 7594.6,
+    "grade": "Miss",
+    "date": "2026-04-16 14:16"
   }
+  
 ]

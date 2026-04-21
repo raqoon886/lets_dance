@@ -81,6 +81,8 @@ class GameEngine:
         self._leaderboard: list = []        # [{song_id, title, score, grade, mode, date}, ...]
         self._leaderboard_filter: str = ""  # "" = 전체, else song_id
         self._leaderboard_tab: str = "all"  # "all" | "practice" | "challenge" | "freestyle"
+        self._lb_scroll: int = 0            # 리더보드 스크롤 오프셋 (행 단위)
+        self._lb_max_scroll: int = 0        # 리더보드 최대 스크롤 (render에서 갱신)
         # 이름 입력 오버레이 (결과 화면 진입 시 표시)
         self._name_input_active: bool = False  # 오버레이 표시 중 여부
         self._name_input_text: str = ""        # 현재 입력 텍스트
@@ -156,6 +158,7 @@ class GameEngine:
         self._multi_status_msg: str = ""        # WAITING 화면 상태 메시지
         self._multi_found: bool = False         # 탐색 성공 여부 (WAITING → SONG_SELECT)
         self._multi_timed_out: bool = False     # 탐색 실패 여부
+        self._multi_game_start_received: bool = False  # CLIENT: HOST 시작 신호 수신 여부
 
     def initialize(self):
         """
@@ -896,7 +899,14 @@ class GameEngine:
 
                 # ↓ : 다음 항목
                 elif event.key == pygame.K_DOWN:
-                    if self.state == GameState.SONG_SELECT and self._song_depth == 2:
+                    if self.state == GameState.LEADERBOARD:
+                        if self._generic_focus_idx == 0:
+                            if self._lb_scroll < self._lb_max_scroll:
+                                self._lb_scroll += 1   # 목록 스크롤 아래로
+                            else:
+                                self._generic_focus_idx = 1  # 최하단 → BACK 포커스
+                        # idx==1(BACK)에서 ↓는 아무것도 안 함
+                    elif self.state == GameState.SONG_SELECT and self._song_depth == 2:
                         pass  # depth2에선 ↓ 무시
                     else:
                         cnt = _focus_count()
@@ -905,7 +915,12 @@ class GameEngine:
 
                 # ↑ : 이전 항목
                 elif event.key == pygame.K_UP:
-                    if self.state == GameState.SONG_SELECT and self._song_depth == 2:
+                    if self.state == GameState.LEADERBOARD:
+                        if self._generic_focus_idx == 1:
+                            self._generic_focus_idx = 0  # BACK → 콘텐츠로 복귀
+                        else:
+                            self._lb_scroll = max(0, self._lb_scroll - 1)  # 목록 스크롤 위로
+                    elif self.state == GameState.SONG_SELECT and self._song_depth == 2:
                         self._song_depth = 1   # ↑ → depth1으로 돌아가기
                     else:
                         cnt = _focus_count()
@@ -919,6 +934,7 @@ class GameEngine:
                             tabs = ["all", "practice", "challenge", "freestyle"]
                             cur = tabs.index(self._leaderboard_tab) if self._leaderboard_tab in tabs else 0
                             self._leaderboard_tab = tabs[(cur + 1) % len(tabs)]
+                            self._lb_scroll = 0
                     elif self.state == GameState.SETTINGS:
                         self._on_button_press("btn_settings_vol_up")
                     else:
@@ -935,6 +951,7 @@ class GameEngine:
                             tabs = ["all", "practice", "challenge", "freestyle"]
                             cur = tabs.index(self._leaderboard_tab) if self._leaderboard_tab in tabs else 0
                             self._leaderboard_tab = tabs[(cur - 1) % len(tabs)]
+                            self._lb_scroll = 0
                     elif self.state == GameState.SETTINGS:
                         self._on_button_press("btn_settings_vol_down")
                     else:
@@ -980,6 +997,11 @@ class GameEngine:
                     self._handle_click(event.pos)
                 self._finger_handled = False
 
+            # ── 마우스 휠 스크롤 ────────────────────────────────
+            elif event.type == pygame.MOUSEWHEEL:
+                if self.state == GameState.LEADERBOARD:
+                    self._lb_scroll = max(0, self._lb_scroll - event.y)
+
             # ── 핑거(터치스크린 전용) 이벤트 ──────────────────────
             elif event.type == pygame.FINGERDOWN:
                 w_d, h_d = self._display.get_size()
@@ -987,6 +1009,16 @@ class GameEngine:
                 self._last_event_type = 'touch'
                 self._finger_handled = True   # 뒤따라오는 MOUSEBUTTONDOWN 무시
                 self._handle_click(touch_pos)
+
+            # ── 핑거 스와이프 (터치 스크롤) ────────────────────────
+            elif event.type == pygame.FINGERMOTION:
+                if self.state == GameState.LEADERBOARD:
+                    h_d = self._display.get_height()
+                    # dy > 0 → 아래→위 스와이프 → 목록 아래로 (scroll 증가)
+                    # dy < 0 → 위→아래 스와이프 → 목록 위로 (scroll 감소)
+                    dy_px = event.dy * h_d
+                    if abs(dy_px) > 4:
+                        self._lb_scroll = max(0, self._lb_scroll + (1 if dy_px < -8 else -1 if dy_px > 8 else 0))
 
     def _handle_click(self, pos: tuple):
         """
@@ -1062,7 +1094,21 @@ class GameEngine:
         elif btn_name == "btn_multi_play":
             self._is_multi_mode = True
             self._current_mode = "practice"
-            self.transition_to(GameState.WAITING)
+            # ── 단일 보드 테스트 모드: FakeGameSocket으로 즉시 연결 ──
+            # 보드가 2대 생기면 아래 if 블록 전체를 삭제하고 WAITING 상태로 이동
+            _fake_mode = self.config.get("debug", {}).get("fake_multi", False)
+            if _fake_mode:
+                from network.fake_socket import FakeGameSocket
+                _duration = float((self._current_song or {}).get("duration", 60))
+                self._multi_socket = FakeGameSocket(song_duration=_duration)
+                self._multi_socket.start()
+                self._multi_role = "host"
+                self._multi_opponent_ip = "127.0.0.1 (FAKE)"
+                self._selected_song_idx = 0
+                print("[MULTI] FakeGameSocket 연결 — 실제 네트워크 없이 UI 테스트", flush=True)
+                self.transition_to(GameState.SONG_SELECT)
+            else:
+                self.transition_to(GameState.WAITING)
         elif btn_name == "btn_quit":
             self.running = False
 
@@ -1134,6 +1180,7 @@ class GameEngine:
         elif btn_name.startswith("btn_lb_tab_"):
             tab = btn_name[len("btn_lb_tab_"):]
             self._leaderboard_tab = tab
+            self._lb_scroll = 0   # 탭 변경 시 스크롤 초기화
 
         # ── 설정/카운트다운/준비 화면 버튼 ──
         elif btn_name == "btn_back":
@@ -1169,7 +1216,13 @@ class GameEngine:
             self._update_waiting()
 
         elif self.state == GameState.READY:
-            self._update_ready()
+            # 멀티플레이 CLIENT: HOST의 시작 신호를 받으면 즉시 COUNTDOWN
+            if (self._is_multi_mode and self._multi_role == "client"
+                    and self._multi_game_start_received):
+                self._multi_game_start_received = False
+                self.transition_to(GameState.COUNTDOWN)
+            else:
+                self._update_ready()
 
         elif self.state == GameState.COUNTDOWN:
             elapsed = time.time() - self._countdown_start
@@ -1726,7 +1779,7 @@ class GameEngine:
 
         # 하단 안내
         hint_col = (80, 70, 100)
-        hint = self._fonts["small_retro"].render("ESC: 취소", True, hint_col)
+        hint = self._fonts["small_retro"].render("ESC: CANCEL", True, hint_col)
         self._display.blit(hint, hint.get_rect(center=(w // 2, h - 24)))
 
     def _render_menu(self, w, h):
@@ -2915,6 +2968,7 @@ class GameEngine:
 
     def _render_result(self, w, h):
         """Render result screen."""
+        import math
 
         tick = self._neon_tick
 
@@ -2930,128 +2984,39 @@ class GameEngine:
             scan.fill((0, 0, 0, 40))
             self._display.blit(scan, (0, y_i))
 
-        MARGIN_TOP = 30
-        MARGIN_BOTTOM = 40
-        FOOTER_H = 24
-        BTN_H = 50
-        BTN_W = min(200, (w - 60) // 2)
+        MARGIN_TOP    = 18
+        MARGIN_BOTTOM = 36
+        FOOTER_H      = 22
+        BTN_H         = 46
+        BTN_W         = min(160, (w - 80) // 3)
+        btn_gap       = 14
+        btn_area_y    = h - MARGIN_BOTTOM - FOOTER_H - BTN_H - 8
 
-        # 타이틀 (레트로 폰트 + 네온 글로우)
-        if self._challenge_game_over:
-            title_text = "GAME OVER!"
-            title_col  = self._neon_color((255, 60, 60), tick)
-            glow_col   = (80, 0, 0)
-        else:
-            title_text = "DANCE COMPLETE!"
-            title_col  = self._neon_color((255, 220, 50), tick)
-            glow_col   = (100, 80, 0)
-        title = self._fonts["result_big"].render(title_text, True, title_col)
-        glow  = self._fonts["result_big"].render(title_text, True, glow_col)
-        for dx, dy in [(-3,0),(3,0),(0,-3),(0,3)]:
-            self._display.blit(glow, glow.get_rect(center=(w // 2 + dx, MARGIN_TOP + 30 + dy)))
-        self._display.blit(title, title.get_rect(center=(w // 2, MARGIN_TOP + 30)))
-
-        # ── 멀티플레이 결과: 승/패 배지 ──────────────────────────
-        if self._is_multi_mode and self._multi_socket:
-            my_score  = (self._result_data or {}).get("total_score", 0)
-            opp_score = self._multi_socket.opponent_final_score
-            if self._multi_socket.opponent_finished or opp_score > 0:
-                if my_score > opp_score:
-                    vs_txt, vs_col = "WIN!", (0, 255, 150)
-                elif my_score < opp_score:
-                    vs_txt, vs_col = "LOSE...", (255, 80, 80)
-                else:
-                    vs_txt, vs_col = "DRAW", (255, 220, 0)
-                vs_surf = self._fonts["result_big"].render(vs_txt, True, self._neon_color(vs_col, tick))
-                self._display.blit(vs_surf, vs_surf.get_rect(midleft=(16, MARGIN_TOP + 30)))
-                opp_txt = self._fonts["small_retro"].render(
-                    f"OPPONENT: {int(opp_score):06d}", True, (200, 160, 200))
-                self._display.blit(opp_txt, opp_txt.get_rect(midleft=(16, MARGIN_TOP + 58)))
-            else:
-                wait_surf = self._fonts["small_retro"].render(
-                    "Waiting opponent...", True, (150, 150, 180))
-                self._display.blit(wait_surf, wait_surf.get_rect(midleft=(16, MARGIN_TOP + 30)))
-
-        # 모드 배지
         mode_colors = {"practice": (0,220,180), "challenge": (255,190,0), "freestyle": (200,100,255)}
         mode_labels = {"practice": "PRACTICE", "challenge": "CHALLENGE", "freestyle": "FREE STYLE"}
-        mbadge_col = mode_colors.get(self._current_mode, (180,180,255))
-        mbadge_txt = mode_labels.get(self._current_mode, "")
-        mbadge = self._fonts["small_retro"].render(f"[ {mbadge_txt} ]", True, self._neon_color(mbadge_col, tick))
-        self._display.blit(mbadge, mbadge.get_rect(midright=(w - 16, MARGIN_TOP + 30)))
 
-        # 구분선 (네온)
-        line_col = self._neon_color((200, 100, 255), tick, 0.7)
-        pygame.draw.line(self._display, line_col,
-                         (w // 4, MARGIN_TOP + 54), (w * 3 // 4, MARGIN_TOP + 54), 1)
+        # ── 멀티플레이 레이아웃 ──────────────────────────────────
+        if self._is_multi_mode and self._multi_socket:
+            self._render_result_multi(w, h, tick, MARGIN_TOP, btn_area_y,
+                                      mode_colors, mode_labels)
+        else:
+            # ── 싱글플레이 레이아웃 (기존) ──────────────────────
+            self._render_result_single(w, h, tick, MARGIN_TOP, btn_area_y,
+                                       mode_colors, mode_labels)
 
-        # 하단 버튼/푸터 영역 계산
-        btn_area_y = h - MARGIN_BOTTOM - FOOTER_H - BTN_H - 10
-        content_top = MARGIN_TOP + 70
-        content_bottom = btn_area_y - 20
-
-        if self._result_data:
-            data = self._result_data
-
-            if self._current_mode == "freestyle":
-                # 프리스타일: 점수 없이 완료 메시지만
-                msg = self._fonts["result_big"].render("GREAT MOVES!", True, self._neon_color((200, 100, 255), tick))
-                self._display.blit(msg, msg.get_rect(center=(w // 2, (content_top + content_bottom) // 2)))
-            else:
-                items = [
-                    (f"SCORE:     {data.get('total_score', 0)}",    (0, 255, 200)),
-                    (f"MAX COMBO: {data.get('max_combo', 0)}",      (255, 220, 0)),
-                    (f"MOVES:     {data.get('total_moves', 0)}",    (200, 200, 220)),
-                    (f"AVG:       {data.get('average_score', 0):.1f}", (180, 180, 255)),
-                    (f"GRADE:     {data.get('final_grade', '-')}",  (255, 180, 0)),
-                ]
-
-                hits = data.get("hit_counts", {})
-                total_items = len(items) + (1 if hits else 0)
-                item_gap = min(48, max(30, (content_bottom - content_top) // max(total_items, 1)))
-
-                y = content_top
-                for text, color in items:
-                    surf = self._fonts["result_big"].render(text, True, color)
-                    self._display.blit(surf, surf.get_rect(center=(w // 2, y)))
-                    y += item_gap
-
-                if hits:
-                    y += 4
-                    hit_text = "  |  ".join(f"{k}: {v}" for k, v in hits.items())
-                    hit_surf = self._fonts["small_retro"].render(hit_text, True, (160, 160, 180))
-                    self._display.blit(hit_surf, hit_surf.get_rect(center=(w // 2, y)))
-                    y += item_gap
-
-                # 리더보드 내 순위 표시
-                self._leaderboard_load()
-                mode_entries = [e for e in self._leaderboard
-                                if e.get("mode", "practice") == self._current_mode]
-                mode_entries_sorted = sorted(mode_entries, key=lambda e: e.get("score", 0), reverse=True)
-                cur_score = data.get("total_score", 0)
-                rank = sum(1 for e in mode_entries_sorted if e.get("score", 0) > cur_score) + 1
-                total = len(mode_entries_sorted)
-                rank_col = (255, 220, 50) if rank == 1 else (0, 220, 200) if rank <= 3 else (180, 180, 220)
-                rank_txt = f"YOUR RANK:  #{rank}  of  {total}  [{mode_labels.get(self._current_mode,'')}]"
-                rank_surf = self._fonts["small_retro"].render(rank_txt, True, rank_col)
-                self._display.blit(rank_surf, rank_surf.get_rect(center=(w // 2, y + 6)))
-
-        # 버튼: 다시하기 / 곡 선택 / 메뉴 (하단 고정, 중앙 정렬)
+        # ── 하단 버튼 (공통) ─────────────────────────────────────
         mouse_pos = pygame.mouse.get_pos()
-        BTN_W = min(160, (w - 80) // 3)
-        btn_gap = 16
         total_w = BTN_W * 3 + btn_gap * 2
-        btn_x = w // 2 - total_w // 2
-
+        btn_x   = w // 2 - total_w // 2
         btn_defs = [
-            ("btn_retry",        "RETRY",    (0, 140, 90)),
-            ("btn_result_songs", "SONGS",    (60, 100, 200)),
-            ("btn_result_menu",  "MENU",     (100, 40, 120)),
+            ("btn_retry",        "RETRY",  (0, 140, 90)),
+            ("btn_result_songs", "SONGS",  (60, 100, 200)),
+            ("btn_result_menu",  "MENU",   (100, 40, 120)),
         ]
         for i, (btn_name, label, color) in enumerate(btn_defs):
             rect = pygame.Rect(btn_x + i * (BTN_W + btn_gap), btn_area_y, BTN_W, BTN_H)
             self._btn_rects[btn_name] = rect
-            hover = rect.collidepoint(mouse_pos)
+            hover   = rect.collidepoint(mouse_pos)
             focused = (getattr(self, '_generic_focus_idx', 0) == i)
             draw_color = tuple(min(c + 50, 255) for c in color) if (hover or focused) else color
             pygame.draw.rect(self._display, draw_color, rect, border_radius=14)
@@ -3066,9 +3031,201 @@ class GameEngine:
         )
         self._display.blit(hint, hint.get_rect(center=(w // 2, h - MARGIN_BOTTOM + 10)))
 
-        # ── 이름 입력 오버레이 ────────────────────────────────────────────
+        # ── 이름 입력 오버레이 ───────────────────────────────────
         if self._name_input_active:
             self._render_name_input_overlay(w, h)
+
+    # ── 결과 화면: 싱글플레이 ─────────────────────────────────────────
+
+    def _render_result_single(self, w, h, tick, MARGIN_TOP, btn_area_y,
+                              mode_colors, mode_labels):
+        """싱글플레이 결과 — 기존 레이아웃."""
+        # 타이틀
+        if self._challenge_game_over:
+            title_text, title_col, glow_col = "GAME OVER!", \
+                self._neon_color((255,60,60), tick), (80,0,0)
+        else:
+            title_text, title_col, glow_col = "DANCE COMPLETE!", \
+                self._neon_color((255,220,50), tick), (100,80,0)
+        title = self._fonts["result_big"].render(title_text, True, title_col)
+        glow  = self._fonts["result_big"].render(title_text, True, glow_col)
+        for dx, dy in [(-3,0),(3,0),(0,-3),(0,3)]:
+            self._display.blit(glow, glow.get_rect(center=(w//2+dx, MARGIN_TOP+30+dy)))
+        self._display.blit(title, title.get_rect(center=(w//2, MARGIN_TOP+30)))
+
+        mbadge = self._fonts["small_retro"].render(
+            f"[ {mode_labels.get(self._current_mode,'')} ]", True,
+            self._neon_color(mode_colors.get(self._current_mode,(180,180,255)), tick))
+        self._display.blit(mbadge, mbadge.get_rect(midright=(w-16, MARGIN_TOP+30)))
+
+        line_col = self._neon_color((200,100,255), tick, 0.7)
+        pygame.draw.line(self._display, line_col,
+                         (w//4, MARGIN_TOP+54), (w*3//4, MARGIN_TOP+54), 1)
+
+        content_top    = MARGIN_TOP + 70
+        content_bottom = btn_area_y - 20
+
+        if self._result_data:
+            data = self._result_data
+            if self._current_mode == "freestyle":
+                msg = self._fonts["result_big"].render(
+                    "GREAT MOVES!", True, self._neon_color((200,100,255), tick))
+                self._display.blit(msg, msg.get_rect(
+                    center=(w//2, (content_top+content_bottom)//2)))
+            else:
+                items = [
+                    (f"SCORE:     {data.get('total_score',0)}",       (0,255,200)),
+                    (f"MAX COMBO: {data.get('max_combo',0)}",         (255,220,0)),
+                    (f"MOVES:     {data.get('total_moves',0)}",       (200,200,220)),
+                    (f"AVG:       {data.get('average_score',0):.1f}", (180,180,255)),
+                    (f"GRADE:     {data.get('final_grade','-')}",     (255,180,0)),
+                ]
+                hits = data.get("hit_counts", {})
+                total_items = len(items) + (1 if hits else 0)
+                item_gap = min(48, max(28, (content_bottom - content_top) // max(total_items,1)))
+                y = content_top
+                for text, color in items:
+                    surf = self._fonts["result_big"].render(text, True, color)
+                    self._display.blit(surf, surf.get_rect(center=(w//2, y)))
+                    y += item_gap
+                if hits:
+                    y += 4
+                    hit_surf = self._fonts["small_retro"].render(
+                        "  |  ".join(f"{k}: {v}" for k,v in hits.items()),
+                        True, (160,160,180))
+                    self._display.blit(hit_surf, hit_surf.get_rect(center=(w//2, y)))
+                    y += item_gap
+                self._leaderboard_load()
+                mode_entries = sorted(
+                    [e for e in self._leaderboard if e.get("mode","practice")==self._current_mode],
+                    key=lambda e: e.get("score",0), reverse=True)
+                cur_score = data.get("total_score", 0)
+                rank  = sum(1 for e in mode_entries if e.get("score",0) > cur_score) + 1
+                total = len(mode_entries)
+                rank_col = (255,220,50) if rank==1 else (0,220,200) if rank<=3 else (180,180,220)
+                rank_surf = self._fonts["small_retro"].render(
+                    f"YOUR RANK:  #{rank}  of  {total}  [{mode_labels.get(self._current_mode,'')}]",
+                    True, rank_col)
+                self._display.blit(rank_surf, rank_surf.get_rect(center=(w//2, y+6)))
+
+    # ── 결과 화면: 멀티플레이 ─────────────────────────────────────────
+
+    def _render_result_multi(self, w, h, tick, MARGIN_TOP, btn_area_y,
+                             mode_colors, mode_labels):
+        """멀티플레이 결과 — 승부 결과 크게 + 싱글과 동일한 스탯 레이아웃."""
+        import math
+
+        data      = self._result_data or {}
+        sock      = self._multi_socket
+        my_score  = int(data.get("total_score", 0))
+        opp_score = int(sock.opponent_final_score) if sock else 0
+        finished  = sock.opponent_finished if sock else False
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        #  상단 영역: 승부 결과 (feedback 폰트 = 72px 레트로, 펄스)
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # feedback 폰트 높이 ~80px, 점수 행 ~28px, 여유 포함 → 약 120px
+        VS_AREA_H = 118
+        vs_cy     = MARGIN_TOP + VS_AREA_H // 2
+
+        if not finished and opp_score == 0:
+            wait_surf = self._fonts["result_big"].render(
+                "Waiting opponent...", True, (160,160,200))
+            self._display.blit(wait_surf, wait_surf.get_rect(center=(w//2, vs_cy)))
+        else:
+            if my_score > opp_score:
+                vs_txt, vs_col, glow_col = "WIN!", (0, 255, 150), (0, 80, 40)
+            elif my_score < opp_score:
+                vs_txt, vs_col, glow_col = "LOSE", (255, 70, 70), (90, 0, 0)
+            else:
+                vs_txt, vs_col, glow_col = "DRAW", (255, 220, 0), (90, 70, 0)
+
+            # 펄스 애니메이션 (±4%)
+            pulse = 1.0 + 0.04 * math.sin(tick * 4)
+
+            # 글로우 레이어 (feedback 폰트 72px)
+            glow_surf = self._fonts["feedback"].render(vs_txt, True, glow_col)
+            gs = pygame.transform.smoothscale(glow_surf, (
+                int(glow_surf.get_width() * pulse * 1.06),
+                int(glow_surf.get_height() * pulse * 1.06),
+            ))
+            for dx, dy in [(-5,0),(5,0),(0,-5),(0,5),(-4,-4),(4,4)]:
+                self._display.blit(gs, gs.get_rect(center=(w//2+dx, vs_cy+dy)))
+
+            # 메인 텍스트
+            main_surf = self._fonts["feedback"].render(
+                vs_txt, True, self._neon_color(vs_col, tick))
+            ms = pygame.transform.smoothscale(main_surf, (
+                int(main_surf.get_width() * pulse),
+                int(main_surf.get_height() * pulse),
+            ))
+            self._display.blit(ms, ms.get_rect(center=(w//2, vs_cy)))
+
+            # 점수 비교 행 (승부 결과 바로 아래, result_big 폰트)
+            score_y = MARGIN_TOP + VS_AREA_H - 14
+            my_col  = self._neon_color(vs_col if my_score >= opp_score else (180,180,200), tick)
+            op_col  = self._neon_color((255,80,160), tick)
+
+            me_surf  = self._fonts["result_big"].render(f"ME  {my_score:06d}", True, my_col)
+            sep_surf = self._fonts["result_big"].render("  vs  ", True, (120,120,160))
+            op_surf  = self._fonts["result_big"].render(f"{opp_score:06d}  OPP", True, op_col)
+
+            total_row_w = me_surf.get_width() + sep_surf.get_width() + op_surf.get_width()
+            max_w = w - 32
+            if total_row_w > max_w:
+                sc = max_w / total_row_w
+                def _scale(s):
+                    return pygame.transform.smoothscale(s,
+                        (int(s.get_width()*sc), int(s.get_height()*sc)))
+                me_surf  = _scale(me_surf)
+                sep_surf = _scale(sep_surf)
+                op_surf  = _scale(op_surf)
+                total_row_w = me_surf.get_width() + sep_surf.get_width() + op_surf.get_width()
+
+            rx = w // 2 - total_row_w // 2
+            for surf in (me_surf, sep_surf, op_surf):
+                self._display.blit(surf, surf.get_rect(midleft=(rx, score_y)))
+                rx += surf.get_width()
+
+        # 모드 배지
+        mbadge = self._fonts["small_retro"].render(
+            f"[ {mode_labels.get(self._current_mode,'')} ]", True,
+            self._neon_color(mode_colors.get(self._current_mode,(180,180,255)), tick))
+        self._display.blit(mbadge, mbadge.get_rect(midright=(w-16, MARGIN_TOP + 10)))
+
+        # 구분선
+        sep_y = MARGIN_TOP + VS_AREA_H + 2
+        line_col = self._neon_color((200,100,255), tick, 0.7)
+        pygame.draw.line(self._display, line_col, (w//4, sep_y), (w*3//4, sep_y), 1)
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        #  하단 영역: 내 스탯 — 싱글과 동일한 result_big 레이아웃
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        content_top    = sep_y + 28
+        content_bottom = btn_area_y - 10
+
+        if data and self._current_mode != "freestyle":
+            items = [
+                (f"SCORE:     {data.get('total_score',0)}",       (0,255,200)),
+                (f"MAX COMBO: {data.get('max_combo',0)}",         (255,220,0)),
+                (f"MOVES:     {data.get('total_moves',0)}",       (200,200,220)),
+                (f"AVG:       {data.get('average_score',0):.1f}", (180,180,255)),
+                (f"GRADE:     {data.get('final_grade','-')}",     (255,180,0)),
+            ]
+            hits = data.get("hit_counts", {})
+            total_items = len(items) + (1 if hits else 0)
+            item_gap = min(36, max(22, (content_bottom - content_top) // max(total_items, 1)))
+            y = content_top
+            for text, color in items:
+                surf = self._fonts["result_big"].render(text, True, color)
+                self._display.blit(surf, surf.get_rect(center=(w//2, y)))
+                y += item_gap
+            if hits:
+                y += 4
+                hit_surf = self._fonts["small_retro"].render(
+                    "  |  ".join(f"{k}: {v}" for k, v in hits.items()),
+                    True, (160, 160, 180))
+                self._display.blit(hit_surf, hit_surf.get_rect(center=(w//2, y)))
 
     def _render_name_input_overlay(self, w, h):
         """결과 화면 위에 표시되는 이름 입력 반투명 오버레이."""
@@ -3253,16 +3410,25 @@ class GameEngine:
         # 엔트리 목록
         ROW_H = 22
         max_rows = max(1, (h - MARGIN_BOTTOM - BTN_H - 20 - TABLE_TOP - 24) // ROW_H)
+
+        # 스크롤 범위 clamp
+        total_entries = len(entries)
+        max_scroll = max(0, total_entries - max_rows)
+        self._lb_max_scroll = max_scroll
+        self._lb_scroll = max(0, min(self._lb_scroll, max_scroll))
+
         if not entries:
             empty = self._fonts["small_retro"].render("No records yet!", True, (120, 120, 160))
             self._display.blit(empty, empty.get_rect(center=(w//2, TABLE_TOP + 50)))
         else:
-            for ri, entry in enumerate(entries[:max_rows]):
+            visible = entries[self._lb_scroll : self._lb_scroll + max_rows]
+            for ri, entry in enumerate(visible):
+                abs_rank = self._lb_scroll + ri   # 0-based
                 ry = TABLE_TOP + 24 + ri * ROW_H
-                row_col = (255, 220, 50) if ri == 0 else (200, 200, 220)
+                row_col = (255, 220, 50) if abs_rank == 0 else (200, 200, 220)
                 player = entry.get("player", "") or "-"
                 vals = [
-                    f"#{ri+1}",
+                    f"#{abs_rank+1}",
                     entry.get("title", entry.get("song_id", "?"))[:10],
                     player[:10],
                     str(entry.get("score", 0)),
@@ -3272,6 +3438,31 @@ class GameEngine:
                 for vi, (val, vx) in enumerate(zip(vals, header_xs)):
                     vs = self._fonts["small_retro"].render(val, True, row_col)
                     self._display.blit(vs, (vx, ry))
+
+            # 스크롤 인디케이터 (우측 사이드바)
+            if total_entries > max_rows:
+                bar_x = w - 10
+                bar_top = TABLE_TOP + 24
+                bar_bot = TABLE_TOP + 24 + max_rows * ROW_H
+                bar_h = bar_bot - bar_top
+                pygame.draw.line(self._display, (60, 50, 100), (bar_x, bar_top), (bar_x, bar_bot), 2)
+                # 썸 위치
+                thumb_h = max(16, bar_h * max_rows // max(total_entries, 1))
+                thumb_y = bar_top + (bar_h - thumb_h) * self._lb_scroll // max(max_scroll, 1)
+                pygame.draw.rect(self._display, (160, 100, 255),
+                                 (bar_x - 3, thumb_y, 6, thumb_h), border_radius=3)
+                # ▲▼ 힌트
+                if self._lb_scroll > 0:
+                    up_s = self._fonts["small_retro"].render("▲", True, (160, 140, 220))
+                    self._display.blit(up_s, up_s.get_rect(midright=(w - 14, bar_top - 6)))
+                if self._lb_scroll < max_scroll:
+                    dn_s = self._fonts["small_retro"].render("▼", True, (160, 140, 220))
+                    self._display.blit(dn_s, dn_s.get_rect(midright=(w - 14, bar_bot + 8)))
+                # 페이지 카운터
+                pg_s = self._fonts["small_retro"].render(
+                    f"{self._lb_scroll+1}-{min(self._lb_scroll+max_rows, total_entries)}/{total_entries}",
+                    True, (120, 110, 160))
+                self._display.blit(pg_s, pg_s.get_rect(midright=(w - 16, bar_bot + 22)))
 
         # BACK 버튼 — _generic_focus_idx==1 일 때만 강조
         mouse_pos = pygame.mouse.get_pos()
@@ -3295,7 +3486,7 @@ class GameEngine:
         self._display.blit(lbl, lbl.get_rect(center=back_rect.center))
 
         hint = self._fonts["small_retro"].render(
-            "←/→: SWITCH TAB   ↑/↓: SWITCH TAB   ENTER/SPACE/ESC/B: BACK", True, (120, 110, 160))
+            "←/→: SWITCH TAB   ↑/↓: SCROLL   ENTER/ESC/B: BACK", True, (120, 110, 160))
         self._display.blit(hint, hint.get_rect(center=(w//2, h - 22)))
 
     def _render_settings(self, w, h):
@@ -3437,8 +3628,9 @@ class GameEngine:
         sock.on_disconnect = self._on_multi_disconnect
         sock.on_opponent_finish = lambda: None  # 결과 화면에서 처리
         if role == "client":
-            # CLIENT는 HOST의 곡 선택을 수신해서 자동으로 진행
+            # CLIENT: HOST의 곡 선택 수신 + 시작 신호 수신
             sock.on_song_select = self._on_multi_song_received
+            sock.on_game_start  = self._on_multi_game_start
         sock.start()
         self._multi_socket = sock
 
@@ -3465,13 +3657,18 @@ class GameEngine:
 
     def _on_multi_song_received(self, song_id: str):
         """CLIENT: HOST가 선택한 곡을 수신 — 백그라운드 스레드에서 호출."""
-        # 곡 목록에서 song_id와 일치하는 곡 찾기
         for song in self._songs:
             if song.get("id") == song_id:
                 self._current_song = song
                 break
-        self._multi_found = True  # WAITING 화면 루프에서 진행 트리거로 재사용
+        self._multi_found = True  # WAITING 화면 루프에서 진행 트리거
         print(f"[MULTI] HOST 곡 수신: {song_id}", flush=True)
+
+    def _on_multi_game_start(self):
+        """CLIENT: HOST의 카운트다운 시작 신호 수신 — 백그라운드 스레드에서 호출."""
+        # 메인 스레드에서 처리하기 위해 플래그 사용
+        self._multi_game_start_received = True
+        print("[MULTI] 시작 신호 수신 → COUNTDOWN", flush=True)
 
     def transition_to(self, new_state: str):
         """Transition to a new game state."""
@@ -3531,6 +3728,10 @@ class GameEngine:
         elif state == GameState.COUNTDOWN:
             self._countdown_start = time.time()
             self._countdown_timer = 2  # 3초 카운트다운 (워밍업 시간 확보)
+            # 멀티플레이 HOST: CLIENT에게 동시 시작 신호 전송
+            if self._is_multi_mode and self._multi_role == "host" and self._multi_socket:
+                self._multi_socket.send_start()
+                print("[MULTI] 시작 신호 전송 → CLIENT", flush=True)
         elif state == GameState.PLAYING:
             # PAUSED→PLAYING 복귀인 경우에만 세션 유지
             resuming_from_pause = getattr(self, '_prev_state', None) == GameState.PAUSED

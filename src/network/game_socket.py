@@ -8,7 +8,7 @@ import time
 from .protocol import (
     make_msg, parse_msg,
     MSG_SCORE_UPDATE, MSG_GAME_END, MSG_DISCONNECT, MSG_HEARTBEAT,
-    MSG_SONG_SELECT,
+    MSG_SONG_SELECT, MSG_GAME_START,
     GAME_PORT,
 )
 
@@ -47,7 +47,8 @@ class GameSocket:
         # optional callbacks (called from recv thread)
         self.on_disconnect = None
         self.on_opponent_finish = None
-        self.on_song_select = None   # (song_id: str) — CLIENT가 HOST 곡 선택을 수신
+        self.on_song_select = None    # (song_id: str)
+        self.on_game_start  = None    # () — CLIENT가 HOST의 시작 신호 수신 시
 
     # ─── public API ──────────────────────────────────────────────────────────
 
@@ -78,6 +79,10 @@ class GameSocket:
     def send_song(self, song_id: str):
         """HOST가 선택한 곡 ID를 CLIENT에 전송."""
         self._send(make_msg(MSG_SONG_SELECT, song_id=song_id))
+
+    def send_start(self):
+        """HOST가 카운트다운 시작 신호를 CLIENT에 전송."""
+        self._send(make_msg(MSG_GAME_START))
 
     def send_score(self, score: int, combo: int, grade: str):
         """Send current score snapshot to opponent."""
@@ -134,6 +139,10 @@ class GameSocket:
                 song_id = str(msg.get("song_id", ""))
                 if song_id and self.on_song_select:
                     self.on_song_select(song_id)
+
+            elif mtype == MSG_GAME_START:
+                if self.on_game_start:
+                    self.on_game_start()
 
             elif mtype == MSG_GAME_END:
                 self.opponent_final_score = int(msg.get("final_score", 0))
