@@ -834,8 +834,14 @@ class GameEngine:
                     self._multi_discovery.stop()
                 self._is_multi_mode = False
                 self.transition_to(GameState.MENU)
-            elif self.state in (GameState.SONG_SELECT, GameState.SETTINGS, GameState.LEADERBOARD):
+            elif self.state in (GameState.SONG_SELECT, GameState.SETTINGS):
                 self.transition_to(GameState.MENU)
+            elif self.state == GameState.LEADERBOARD:
+                if self._lb_confirm_delete is not None:
+                    # 삭제 확인 대기 중 → 취소
+                    self._lb_confirm_delete = None
+                else:
+                    self.transition_to(GameState.MENU)
             elif self.state in (GameState.READY, GameState.COUNTDOWN):
                 self.transition_to(GameState.SONG_SELECT)
             elif self.state == GameState.PAUSED:
