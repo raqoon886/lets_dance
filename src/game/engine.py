@@ -1203,6 +1203,10 @@ class GameEngine:
         elif btn_name == "btn_song_back":
             self.transition_to(GameState.MENU)
         elif btn_name == "btn_song_start":
+            # 멀티플레이 CLIENT는 HOST의 곡 선택을 기다려야 함 → 독립 START 차단
+            if self._is_multi_mode and self._multi_role == "client":
+                print("[MULTI] CLIENT: HOST의 곡 선택을 기다리는 중 (독립 START 차단)", flush=True)
+                return
             songs = self._songs_for_mode(self._current_mode)
             if songs:
                 self._current_song = songs[self._selected_song_idx]
@@ -1309,6 +1313,17 @@ class GameEngine:
         # 피드백 나이 타이머 (등장 후 경과시간, 애니메이션 progress용)
         if self._last_feedback is not None:
             self._feedback_age += 1.0 / self.TARGET_FPS
+
+        # ── 멀티플레이 CLIENT: HOST 곡 선택 신호를 상태에 무관하게 처리 ──
+        # WAITING이 아닌 상태(RESULT, SONG_SELECT 등)에서도 새 곡 수신 시 READY로 전환
+        if (self._is_multi_mode
+                and self._multi_role == "client"
+                and self._multi_found
+                and self.state not in (GameState.WAITING, GameState.PLAYING, GameState.COUNTDOWN)):
+            self._multi_found = False
+            if self._current_song:
+                print(f"[MULTI] CLIENT: 새 곡 수신 → READY ({self._current_song.get('id')})", flush=True)
+                self.transition_to(GameState.READY)
 
         if self.state == GameState.WAITING:
             self._update_waiting()
@@ -4075,12 +4090,17 @@ class GameEngine:
         """CLIENT: HOST가 선택한 곡+모드를 수신 — 백그라운드 스레드에서 호출."""
         self._current_mode = mode
         self._multi_mode_selected = True
+        found = False
         for song in self._songs:
             if song.get("id") == song_id:
                 self._current_song = song
+                found = True
                 break
-        self._multi_found = True  # WAITING 화면 루프에서 진행 트리거
-        print(f"[MULTI] HOST 곡/모드 수신: song={song_id} mode={mode}", flush=True)
+        if found:
+            self._multi_found = True  # 곡을 찾았을 때만 진행 트리거
+            print(f"[MULTI] HOST 곡/모드 수신: song={song_id} mode={mode}", flush=True)
+        else:
+            print(f"[MULTI][WARN] HOST 곡 수신했으나 로컬에서 찾지 못함: song={song_id}", flush=True)
 
     def _on_multi_game_start(self):
         """CLIENT: HOST의 카운트다운 시작 신호 수신 — 백그라운드 스레드에서 호출."""
@@ -4133,6 +4153,7 @@ class GameEngine:
             self._selected_song_idx = 0
             self._song_focus_idx = 0
             self._song_depth = 1            # 곡 선택 창 진입 시 항상 depth1로 초기화
+            self._current_song = {}          # 이전 라운드 곡 초기화 (멀티플레이 곡 불일치 방지)
             self._release_reference_assets()
         elif state == GameState.READY:
             self._stop_preview()  # 미리듣기 중지
@@ -4257,6 +4278,7 @@ class GameEngine:
             self._multi_found = False
             self._multi_timed_out = False
             self._multi_status_msg = ""
+            self._current_song = {}          # WAITING 진입 시 곡 초기화 (스테일 곡 방지)
             # 모드가 이미 선택된 경우에만 Discovery 시작 (미선택이면 모드 선택 화면 표시)
             if self._multi_mode_selected:
                 from network.discovery import Discovery
