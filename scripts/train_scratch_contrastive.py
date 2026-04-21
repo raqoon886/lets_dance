@@ -38,6 +38,8 @@ import tensorflow as tf  # noqa: E402
 from src.embedding.dataset_contrastive import (  # noqa: E402
     ContrastiveBatchGenerator, ContrastiveSequenceStore,
     DANCE_JOINTS, TARGET_DANCES,
+    apply_runtime_window_augment,
+    sample_candidate_indices,
 )
 from src.embedding.models_scratch import build_encoder  # noqa: E402
 
@@ -217,6 +219,160 @@ def verify_tflite(tflite_path: Path, sample_window: np.ndarray):
     return in_det["shape"].tolist(), out_det["shape"].tolist(), emb
 
 
+def summarize_training_history(history: tf.keras.callbacks.History) -> Dict[str, Any]:
+    values = getattr(history, "history", {}) or {}
+    train_loss = values.get("loss") or []
+    val_loss = values.get("val_loss") or []
+    summary: Dict[str, Any] = {
+        "monitor": "val_loss",
+        "restore_best_weights": True,
+        "epochs_ran": len(train_loss),
+    }
+    if val_loss:
+        best_idx = int(np.argmin(np.asarray(val_loss, dtype=np.float32)))
+        summary["best_epoch"] = best_idx + 1
+        summary["best_val_loss"] = float(val_loss[best_idx])
+        if train_loss and best_idx < len(train_loss):
+            summary["best_epoch_loss"] = float(train_loss[best_idx])
+    return summary
+
+
+def _l2_normalize_np(arr: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(arr, axis=-1, keepdims=True)
+    return arr / np.maximum(norms, 1e-8)
+
+
+def _embed_windows(encoder: tf.keras.Model, windows: np.ndarray) -> np.ndarray:
+    emb = encoder.predict(np.asarray(windows, dtype=np.float32), verbose=0)
+    return _l2_normalize_np(np.asarray(emb, dtype=np.float32))
+
+
+def smoke_embedding_metrics(encoder: tf.keras.Model, store: ContrastiveSequenceStore,
+                            sequence_length: int, max_samples: int = 128,
+                            seed: int = 42) -> Dict[str, float]:
+    rng = np.random.default_rng(seed)
+    anchors, close_pos, far_same, far_other = [], [], [], []
+    for _ in range(max_samples):
+        i = int(rng.integers(len(store)))
+        bundle = store.bundles[i]
+        end = int(rng.integers(sequence_length - 1, bundle.num_frames))
+        anchors.append(bundle.original[end - sequence_length + 1:end + 1])
+        if bundle.augments:
+            aug = bundle.augments[int(rng.integers(len(bundle.augments)))]
+            close_pos.append(aug[end - sequence_length + 1:end + 1])
+        else:
+            close_pos.append(bundle.original[end - sequence_length + 1:end + 1])
+
+        for _try in range(30):
+            end_same = int(rng.integers(sequence_length - 1, bundle.num_frames))
+            if abs(end_same - end) >= 2 * sequence_length:
+                break
+        far_same.append(bundle.original[end_same - sequence_length + 1:end_same + 1])
+
+        other_choices = [k for k in range(len(store)) if k != i]
+        other_idx = int(rng.choice(other_choices))
+        other_bundle = store.bundles[other_idx]
+        end_other = int(rng.integers(sequence_length - 1, other_bundle.num_frames))
+        far_other.append(other_bundle.original[end_other - sequence_length + 1:end_other + 1])
+
+    A = _embed_windows(encoder, np.stack(anchors).astype(np.float32))
+    P = _embed_windows(encoder, np.stack(close_pos).astype(np.float32))
+    Ns = _embed_windows(encoder, np.stack(far_same).astype(np.float32))
+    No = _embed_windows(encoder, np.stack(far_other).astype(np.float32))
+    same_t = np.sum(A * P, axis=-1)
+    far_same_sim = np.sum(A * Ns, axis=-1)
+    far_other_sim = np.sum(A * No, axis=-1)
+    return {
+        "cos_same_t_mean": float(np.mean(same_t)),
+        "cos_same_song_far_t_mean": float(np.mean(far_same_sim)),
+        "cos_other_song_mean": float(np.mean(far_other_sim)),
+        "within_dance_margin_mean": float(np.mean(same_t - far_same_sim)),
+        "cross_dance_margin_mean": float(np.mean(same_t - far_other_sim)),
+    }
+
+
+def runtime_alignment_metrics(encoder: tf.keras.Model, store: ContrastiveSequenceStore,
+                              sequence_length: int, candidate_stride: int = 3,
+                              tolerance_frames: int = 12, max_samples: int = 128,
+                              seed: int = 42, user_runtime_jitter: float = 0.01,
+                              user_joint_dropout_prob: float = 0.04,
+                              user_frame_hold_prob: float = 0.05,
+                              user_temporal_warp_prob: float = 0.25,
+                              user_temporal_warp_strength: float = 0.15,
+                              ) -> Dict[str, float]:
+    rng = np.random.default_rng(seed)
+    target_sims = []
+    best_wrong_sims = []
+    target_ranks = []
+    top1_hits = 0
+    top3_hits = 0
+
+    for _ in range(max_samples):
+        bundle = store.bundles[int(rng.integers(len(store)))]
+        end = int(rng.integers(sequence_length - 1, bundle.num_frames))
+        clean_window = bundle.original[end - sequence_length + 1:end + 1]
+        base_window = clean_window
+        if bundle.augments and rng.random() < 0.7:
+            aug = bundle.augments[int(rng.integers(len(bundle.augments)))]
+            base_window = aug[end - sequence_length + 1:end + 1]
+
+        user_window = apply_runtime_window_augment(
+            base_window,
+            rng,
+            gaussian_sigma=user_runtime_jitter,
+            joint_dropout_prob=user_joint_dropout_prob,
+            frame_hold_prob=user_frame_hold_prob,
+            temporal_warp_prob=user_temporal_warp_prob,
+            temporal_warp_strength=user_temporal_warp_strength,
+        )
+        candidate_indices = sample_candidate_indices(
+            bundle.num_frames,
+            end,
+            tolerance_frames=tolerance_frames,
+            stride=candidate_stride,
+            min_end_index=sequence_length - 1,
+        )
+        if end not in candidate_indices:
+            continue
+        candidate_windows = np.stack([
+            bundle.original[idx - sequence_length + 1:idx + 1]
+            for idx in candidate_indices
+        ], axis=0).astype(np.float32)
+
+        user_emb = _embed_windows(encoder, user_window[None, ...])[0]
+        ref_embs = _embed_windows(encoder, candidate_windows)
+        sims = np.dot(ref_embs, user_emb)
+        order = np.argsort(-sims)
+        ordered_indices = [candidate_indices[int(i)] for i in order]
+        target_rank = int(ordered_indices.index(end)) + 1
+        target_idx = candidate_indices.index(end)
+        target_sim = float(sims[target_idx])
+        wrong_mask = np.ones(len(candidate_indices), dtype=bool)
+        wrong_mask[target_idx] = False
+        best_wrong = float(np.max(sims[wrong_mask])) if np.any(wrong_mask) else target_sim
+
+        target_sims.append(target_sim)
+        best_wrong_sims.append(best_wrong)
+        target_ranks.append(target_rank)
+        top1_hits += int(target_rank == 1)
+        top3_hits += int(target_rank <= 3)
+
+    if not target_sims:
+        return {}
+    target_arr = np.asarray(target_sims, dtype=np.float32)
+    wrong_arr = np.asarray(best_wrong_sims, dtype=np.float32)
+    rank_arr = np.asarray(target_ranks, dtype=np.float32)
+    return {
+        "samples": int(len(target_arr)),
+        "target_cosine_mean": float(np.mean(target_arr)),
+        "best_wrong_cosine_mean": float(np.mean(wrong_arr)),
+        "target_margin_mean": float(np.mean(target_arr - wrong_arr)),
+        "target_rank_mean": float(np.mean(rank_arr)),
+        "top1_acc": float(top1_hits / len(target_arr)),
+        "top3_acc": float(top3_hits / len(target_arr)),
+    }
+
+
 # ---------------- Train ----------------
 
 def train(args: argparse.Namespace) -> Dict[str, Any]:
@@ -236,13 +392,28 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
         store, sequence_length=args.sequence_length, batch_size=args.batch_size,
         steps_per_epoch=args.steps_per_epoch, mode=args.loss,
         positive_jitter=args.positive_jitter, negative_gap=args.negative_gap,
+        false_negative_gap=args.false_negative_gap,
+        hard_negative_min_gap=args.hard_negative_min_gap,
+        hard_negative_max_gap=args.hard_negative_max_gap,
+        hard_negative_prob=args.hard_negative_prob,
+        cross_song_prob=args.cross_song_prob,
         split="train", val_fraction=args.val_fraction,
-        runtime_jitter=args.runtime_jitter, seed=args.seed)
+        runtime_jitter=args.runtime_jitter,
+        joint_dropout_prob=args.joint_dropout_prob,
+        frame_hold_prob=args.frame_hold_prob,
+        temporal_warp_prob=args.temporal_warp_prob,
+        temporal_warp_strength=args.temporal_warp_strength,
+        seed=args.seed)
     val_gen = ContrastiveBatchGenerator(
         store, sequence_length=args.sequence_length, batch_size=args.batch_size,
         steps_per_epoch=args.validation_steps, mode=args.loss,
         positive_jitter=0,  # no temporal jitter on val
         negative_gap=args.negative_gap,
+        false_negative_gap=args.false_negative_gap,
+        hard_negative_min_gap=args.hard_negative_min_gap,
+        hard_negative_max_gap=args.hard_negative_max_gap,
+        hard_negative_prob=0.0,
+        cross_song_prob=args.cross_song_prob,
         split="val", val_fraction=args.val_fraction,
         runtime_jitter=0.0,  # clean evaluation
         seed=args.seed + 1000)
@@ -281,8 +452,10 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
     if not output_dir.is_absolute():
         output_dir = PROJECT_ROOT / output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    model_name = args.model_name or (
-        f"scratch_{args.model}_{args.loss}_e{args.embedding_dim}")
+    base_model_name = args.model_name or f"scratch_{args.model}_{args.loss}_e{args.embedding_dim}"
+    model_name = base_model_name
+    if args.name_suffix and not model_name.endswith(args.name_suffix):
+        model_name = f"{model_name}{args.name_suffix}"
     keras_path = output_dir / f"{model_name}_encoder.keras"
     tflite_path = output_dir / f"{model_name}.tflite"
     meta_path = output_dir / f"{model_name}_meta.json"
@@ -291,7 +464,7 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
     if args.loss == "infonce":
         wrapper: tf.keras.Model = InfoNCEWrapper(
             encoder, temperature=args.temperature,
-            negative_gap=args.negative_gap)
+            negative_gap=args.false_negative_gap)
         wrapper.compile(
             optimizer=tf.keras.optimizers.Adam(args.learning_rate, clipnorm=1.0))
     else:
@@ -345,6 +518,25 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
 
     size_bytes = export_tflite(encoder, tflite_path, quantize=not args.no_quantize)
     in_shape, out_shape, sample_emb = verify_tflite(tflite_path, sample)
+    history_dict = {k: [float(x) for x in v] for k, v in history.history.items()}
+    training_summary = summarize_training_history(history)
+    smoke_metrics = smoke_embedding_metrics(
+        encoder, store, sequence_length=args.sequence_length,
+        max_samples=args.eval_max_samples, seed=args.seed)
+    runtime_metrics = runtime_alignment_metrics(
+        encoder,
+        store,
+        sequence_length=args.sequence_length,
+        candidate_stride=args.eval_candidate_stride,
+        tolerance_frames=args.eval_tolerance_frames,
+        max_samples=args.eval_max_samples,
+        seed=args.seed + 77,
+        user_runtime_jitter=args.eval_user_runtime_jitter,
+        user_joint_dropout_prob=args.eval_user_joint_dropout_prob,
+        user_frame_hold_prob=args.eval_user_frame_hold_prob,
+        user_temporal_warp_prob=args.eval_user_temporal_warp_prob,
+        user_temporal_warp_strength=args.eval_user_temporal_warp_strength,
+    )
 
     meta = {
         "model_name": model_name,
@@ -359,7 +551,10 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
                    for k, v in vars(args).items()},
         "tflite_size_kib": size_bytes / 1024.0,
         "sample_embedding_norm": float(np.linalg.norm(sample_emb)),
-        "history": {k: [float(x) for x in v] for k, v in history.history.items()},
+        "history": history_dict,
+        "training_summary": training_summary,
+        "smoke_metrics": smoke_metrics,
+        "runtime_alignment_metrics": runtime_metrics,
     }
     meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
 
@@ -369,6 +564,9 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
 
     print(f"[SAVE] encoder  : {keras_path}")
     print(f"[SAVE] tflite   : {tflite_path} ({size_bytes/1024:.1f} KiB)")
+    print(f"[BEST] summary  : {training_summary}")
+    print(f"[METRIC] smoke  : {smoke_metrics}")
+    print(f"[METRIC] align  : {runtime_metrics}")
     print(f"[SAVE] metadata : {meta_path}")
     return {
         "encoder": encoder, "wrapper": wrapper, "history": history.history,
@@ -376,6 +574,9 @@ def train(args: argparse.Namespace) -> Dict[str, Any]:
                    "meta": str(meta_path)},
         "tflite_size_kib": size_bytes / 1024.0,
         "sample_embedding_norm": float(np.linalg.norm(sample_emb)),
+        "training_summary": training_summary,
+        "smoke_metrics": smoke_metrics,
+        "runtime_alignment_metrics": runtime_metrics,
     }
 
 
@@ -417,15 +618,47 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--triplet-margin", type=float, default=0.2)
     p.add_argument("--positive-jitter", type=int, default=2)
     p.add_argument("--negative-gap", type=int, default=45)
+    p.add_argument("--false-negative-gap", type=int, default=4,
+                   help="same-dance windows closer than this are masked as false negatives "
+                        "in InfoNCE and should stay small for service-style ranking.")
+    p.add_argument("--hard-negative-min-gap", type=int, default=6,
+                   help="minimum frame distance for same-song hard negatives.")
+    p.add_argument("--hard-negative-max-gap", type=int, default=24,
+                   help="maximum frame distance for same-song hard negatives.")
+    p.add_argument("--hard-negative-prob", type=float, default=0.5,
+                   help="probability of sampling a same-song hard negative instead of a far negative.")
+    p.add_argument("--cross-song-prob", type=float, default=0.5,
+                   help="probability of sampling negatives from another song.")
     p.add_argument("--runtime-jitter", type=float, default=0.005,
                    help="on-the-fly Gaussian σ added to A/P/N at every training step "
                         "(0 = disabled). Extra diversity beyond precomputed augments. "
                         "Reasonable range: 0.003~0.01 in hip/torso-normalized coords.")
+    p.add_argument("--joint-dropout-prob", type=float, default=0.04,
+                   help="per joint/frame dropout probability for user-like corruption.")
+    p.add_argument("--frame-hold-prob", type=float, default=0.05,
+                   help="probability of copying the previous frame to mimic detector stall.")
+    p.add_argument("--temporal-warp-prob", type=float, default=0.25,
+                   help="probability of applying a mild temporal warp to a training window.")
+    p.add_argument("--temporal-warp-strength", type=float, default=0.15,
+                   help="strength of temporal warp; 0.1~0.2 is usually enough.")
     # Fine-tuning
     p.add_argument("--pretrained-weights", default=None,
                    help="path to encoder .weights.h5 from pretraining. "
                         "Recommended: --learning-rate 1e-4 --epochs 20 "
                         "--warmup-epochs 1 when using this.")
+    p.add_argument("--name-suffix", default="",
+                   help="optional suffix appended to the exported model name.")
+    p.add_argument("--eval-max-samples", type=int, default=128,
+                   help="number of samples for post-train smoke/runtime-alignment metrics.")
+    p.add_argument("--eval-tolerance-frames", type=int, default=12,
+                   help="candidate search radius used for runtime-alignment evaluation.")
+    p.add_argument("--eval-candidate-stride", type=int, default=3,
+                   help="candidate stride used for runtime-alignment evaluation.")
+    p.add_argument("--eval-user-runtime-jitter", type=float, default=0.01)
+    p.add_argument("--eval-user-joint-dropout-prob", type=float, default=0.04)
+    p.add_argument("--eval-user-frame-hold-prob", type=float, default=0.05)
+    p.add_argument("--eval-user-temporal-warp-prob", type=float, default=0.25)
+    p.add_argument("--eval-user-temporal-warp-strength", type=float, default=0.15)
     # Misc
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--no-quantize", action="store_true")

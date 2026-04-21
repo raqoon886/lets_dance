@@ -177,6 +177,10 @@ def load_reference_sequence(path: Path) -> np.ndarray:
     if seq.shape[2] == 3:
         visibility = np.ones((*seq.shape[:2], 1), dtype=np.float32)
         seq = np.concatenate([seq, visibility], axis=2)
+    # 서비스는 cv2.flip(frame, 1) 후 MediaPipe를 실행하므로 (거울 모드),
+    # reference.npy는 원본 영상(flip 없음)에서 추출됐기 때문에 x축이 반대.
+    # 캐시 임베딩도 flip된 좌표 기준으로 생성해야 서비스 유저 포즈와 일치한다.
+    seq[:, :, 0] = 1.0 - seq[:, :, 0]
     return seq
 
 
