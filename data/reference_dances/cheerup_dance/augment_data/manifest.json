@@ -1,0 +1,490 @@
+{
+  "dance": "cheerup_dance",
+  "source": "data/reference_dances/cheerup_dance/reference.npy",
+  "shape": [
+    724,
+    33,
+    4
+  ],
+  "K": 30,
+  "base_seed": 42,
+  "min_ops": 1,
+  "config": {
+    "flip_p": 0.0,
+    "rot_p": 0.3,
+    "rot_deg": [
+      -10.0,
+      10.0
+    ],
+    "scale_p": 0.3,
+    "scale_range": [
+      0.9,
+      1.1
+    ],
+    "shear_p": 0.3,
+    "shear_range": [
+      -0.08,
+      0.08
+    ],
+    "bone_p": 0.3,
+    "bone_range": [
+      0.95,
+      1.05
+    ],
+    "smooth_p": 0.3,
+    "smooth_sigma": [
+      0.5,
+      1.5
+    ],
+    "drop_p": 0.3,
+    "drop_fraction": [
+      0.02,
+      0.08
+    ],
+    "jitter_p": 0.3,
+    "jitter_sigma": [
+      0.003,
+      0.015
+    ]
+  },
+  "augments": [
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_00.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1133214137,
+      "final_seed": 1133214137,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -3.8256592437933996,
+        "smooth_sigma": 0.9158420510615477,
+        "jitter_sigma": 0.009421144257545984
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_01.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 73963570,
+      "final_seed": 73963570,
+      "ops": {
+        "jitter_sigma": 0.0033334161936504573
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_02.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1962451265,
+      "final_seed": 1962451265,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": 1.364705618335,
+        "smooth_sigma": 1.391235625873533,
+        "jitter_sigma": 0.006959626568422402
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_03.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1821345135,
+      "final_seed": 1821345135,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -6.396161489327121,
+        "smooth_sigma": 1.0672467492317312,
+        "drop_fraction": 0.03184521340545161
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_04.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 2089644113,
+      "final_seed": 2089644113,
+      "ops": {
+        "rot_deg": -6.480063463135579
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_05.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1472887695,
+      "final_seed": 1472887695,
+      "ops": {
+        "rot_deg": 8.929722407954124
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_06.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1227382315,
+      "final_seed": 1227382315,
+      "ops": {
+        "shear": [
+          -0.0555367005794659,
+          -0.00510640693431505
+        ],
+        "drop_fraction": 0.06601938118663879,
+        "jitter_sigma": 0.01016419953464095
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_07.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 898179608,
+      "final_seed": 898179608,
+      "ops": {
+        "smooth_sigma": 0.6082090101707235,
+        "drop_fraction": 0.05261026740673587
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_08.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1534559923,
+      "final_seed": 1534559923,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "drop_fraction": 0.022413480660201067,
+        "jitter_sigma": 0.009039680465781658
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_09.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 422339099,
+      "final_seed": 422339099,
+      "ops": {
+        "smooth_sigma": 1.2401940235321125,
+        "drop_fraction": 0.03318898356135648
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_10.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1720136434,
+      "final_seed": 1720136434,
+      "ops": {
+        "drop_fraction": 0.04294554348400419,
+        "jitter_sigma": 0.008195155202101905
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_11.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1489512641,
+      "final_seed": 1489512641,
+      "ops": {
+        "shear": [
+          -0.038538009858219806,
+          0.04008901265485568
+        ],
+        "smooth_sigma": 0.6878945079888806,
+        "drop_fraction": 0.05230585648276602,
+        "jitter_sigma": 0.012025260168832635
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_12.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 370019590,
+      "final_seed": 370019590,
+      "ops": {
+        "rot_deg": -1.1103457101560963
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_13.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 1515408848,
+      "final_seed": 1515408848,
+      "ops": {
+        "rot_deg": -1.5962604052701383,
+        "scale": 0.9920731712822729,
+        "drop_fraction": 0.06018909075163162
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_14.npy",
+      "n_ops": 5,
+      "attempts": 1,
+      "initial_seed": 1825523557,
+      "final_seed": 1825523557,
+      "ops": {
+        "rot_deg": -9.008381854581524,
+        "shear": [
+          0.05875212073639831,
+          0.00793471969367529
+        ],
+        "smooth_sigma": 1.1776443641093843,
+        "drop_fraction": 0.05757297433092587,
+        "jitter_sigma": 0.009420681699837063
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_15.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 713655479,
+      "final_seed": 713655479,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "shear": [
+          0.01119059932805229,
+          -0.02016851385079635
+        ],
+        "smooth_sigma": 1.1307195356307385
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_16.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1017611096,
+      "final_seed": 1017611096,
+      "ops": {
+        "rot_deg": 7.331396994214188
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_17.npy",
+      "n_ops": 3,
+      "attempts": 2,
+      "initial_seed": 561527860,
+      "final_seed": 690036673,
+      "ops": {
+        "rot_deg": -2.2359561801539307,
+        "shear": [
+          0.07291740995444172,
+          -0.07572096944176776
+        ],
+        "jitter_sigma": 0.004567546382887817
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_18.npy",
+      "n_ops": 4,
+      "attempts": 1,
+      "initial_seed": 1182537649,
+      "final_seed": 1182537649,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "scale": 0.9838064135840902,
+        "smooth_sigma": 0.54666593738066,
+        "jitter_sigma": 0.014466149357232054
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_19.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 2011330376,
+      "final_seed": 2011330376,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "smooth_sigma": 0.7603807135175491,
+        "drop_fraction": 0.06504937243037924
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_20.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 344080438,
+      "final_seed": 344080438,
+      "ops": {
+        "scale": 1.0367193185533097,
+        "drop_fraction": 0.05586107977587179
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_21.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1185209067,
+      "final_seed": 1185209067,
+      "ops": {
+        "rot_deg": 3.5406905929986507,
+        "jitter_sigma": 0.008610786958360222
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_22.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 2029147037,
+      "final_seed": 2029147037,
+      "ops": {
+        "smooth_sigma": 1.416349935816061
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_23.npy",
+      "n_ops": 1,
+      "attempts": 1,
+      "initial_seed": 1202259603,
+      "final_seed": 1202259603,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ]
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_24.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1398619871,
+      "final_seed": 1398619871,
+      "ops": {
+        "rot_deg": 0.14336128608431054,
+        "shear": [
+          0.0443196801100936,
+          0.07016808157378439
+        ]
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_25.npy",
+      "n_ops": 3,
+      "attempts": 1,
+      "initial_seed": 187264703,
+      "final_seed": 187264703,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": 7.639142948309193,
+        "drop_fraction": 0.06307413528862421
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_26.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 947142983,
+      "final_seed": 947142983,
+      "ops": {
+        "shear": [
+          -0.05159925857245815,
+          0.04430874012073999
+        ],
+        "drop_fraction": 0.06628880387727681
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_27.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 1509439776,
+      "final_seed": 1509439776,
+      "ops": {
+        "rot_deg": 4.632577038888508,
+        "shear": [
+          -0.04131065380286751,
+          -0.016352390315013676
+        ]
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_28.npy",
+      "n_ops": 7,
+      "attempts": 1,
+      "initial_seed": 1900231389,
+      "final_seed": 1900231389,
+      "ops": {
+        "bone_range": [
+          0.95,
+          1.05
+        ],
+        "rot_deg": -2.610950817093583,
+        "scale": 1.0790031577980876,
+        "shear": [
+          -0.021374701246977955,
+          0.05478851605244826
+        ],
+        "smooth_sigma": 0.7952058478227259,
+        "drop_fraction": 0.049934222647950985,
+        "jitter_sigma": 0.008842247474318395
+      }
+    },
+    {
+      "dance": "cheerup_dance",
+      "file": "aug_29.npy",
+      "n_ops": 2,
+      "attempts": 1,
+      "initial_seed": 920423109,
+      "final_seed": 920423109,
+      "ops": {
+        "shear": [
+          -0.005639510358048216,
+          0.0023438198269103844
+        ],
+        "jitter_sigma": 0.014594652124493863
+      }
+    }
+  ]
+}

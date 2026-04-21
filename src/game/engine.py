@@ -8,6 +8,7 @@ import os
 import json
 import signal
 import subprocess
+from datetime import datetime
 
 import pygame
 import cv2
@@ -27,6 +28,7 @@ class GameState:
     RESULT = "result"
     SETTINGS = "settings"
     LEADERBOARD = "leaderboard"
+    WAITING = "waiting"    # 멀티플레이 상대방 탐색 중
 
 
 class GameEngine:
@@ -137,6 +139,23 @@ class GameEngine:
         self._particles: list = []           # [{'x','y','vx','vy','life','max_life','color','size'}]
         # 피드백 등장 후 경과 시간 (판정 애니메이션 progress 계산용)
         self._feedback_age: float = 0.0      # 현재 피드백이 표시된 후 흐른 시간(초)
+        # 점수 추적 로그(JSONL)
+        self._score_trace_enabled: bool = True
+        self._score_trace_dir: str = "data/logs/score_traces"
+        self._score_trace_file = None
+        self._score_trace_path: str = ""
+        self._last_similarity_debug = None
+        self._last_terminal_similarity = None
+
+        # ── 멀티플레이 ───────────────────────────────────────────────
+        self._is_multi_mode: bool = False       # 현재 멀티 게임 중 여부
+        self._multi_role: str = ""              # "host" | "client"
+        self._multi_opponent_ip: str = ""
+        self._multi_discovery = None            # Discovery 인스턴스
+        self._multi_socket = None               # GameSocket 인스턴스
+        self._multi_status_msg: str = ""        # WAITING 화면 상태 메시지
+        self._multi_found: bool = False         # 탐색 성공 여부 (WAITING → SONG_SELECT)
+        self._multi_timed_out: bool = False     # 탐색 실패 여부
 
     def initialize(self):
         """
@@ -146,11 +165,38 @@ class GameEngine:
         # SDL이 SIGINT/SIGTERM을 가로채지 않도록 pygame.init() 전에 설정
         os.environ.setdefault("SDL_NO_SIGNAL_HANDLERS", "1")
 
+        # mixer를 pygame.init()보다 먼저 초기화해야 buffer 설정이 적용됨
+        # mono + 버퍼 64 → ~1.5ms 레이턴시 (44100Hz 기준)
+        pygame.mixer.pre_init(44100, -16, 1, 64)
         pygame.init()
-        # 기본 버퍼(4096)는 ~100ms의 레이턴시를 유발하여 영상이 소리에 비해 먼저 나오는 느낌을 줍니다.
-        # 지연을 최소화하기 위해 버퍼를 512로 줄여서 선제 초기화합니다.
-        pygame.mixer.pre_init(44100, -16, 2, 512)
-        pygame.mixer.init()
+
+        # SFX 전용 채널 예약 (0=click, 1=select)
+        pygame.mixer.set_num_channels(16)
+        self._sfx_channel = pygame.mixer.Channel(0)
+        self._sfx_channel_select = pygame.mixer.Channel(1)
+
+        # SFX 로드 — MP3→PCM 사전 변환으로 재생 시 디코딩 오버헤드 제거
+        self._sfx: dict = {}
+        _sfx_volume = float(self.config.get("audio", {}).get("sfx_volume", 0.8))
+        _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+        for _sfx_name in ("click", "select"):
+            _sfx_path = os.path.join(_project_root, "assets", "sounds", f"{_sfx_name}.mp3")
+            if os.path.exists(_sfx_path):
+                _raw = pygame.mixer.Sound(_sfx_path)
+                _pcm_snd = pygame.mixer.Sound(buffer=_raw.get_raw())
+                _pcm_snd.set_volume(_sfx_volume)
+                self._sfx[_sfx_name] = _pcm_snd
+
+        # 무음 재생으로 오디오 파이프라인 워밍업 (첫 재생 지연 방지)
+        if self._sfx:
+            _warmup_snd = next(iter(self._sfx.values()))
+            self._sfx_channel.set_volume(0)
+            self._sfx_channel.play(_warmup_snd)
+            pygame.time.wait(10)
+            self._sfx_channel.stop()
+            self._sfx_channel.set_volume(1.0)
+
         # 키보드 반복 입력: 200ms 후 첫 반복, 이후 80ms 간격
         pygame.key.set_repeat(200, 80)
 
@@ -220,6 +266,13 @@ class GameEngine:
         self._fallback_similarity_method = smoothing_cfg.get(
             "fallback_similarity", self.config.get("similarity_method", "angle"))
 
+        logging_cfg = self.config.get("logging", {})
+        score_trace_cfg = logging_cfg.get("score_trace", {})
+        if isinstance(score_trace_cfg, bool):
+            score_trace_cfg = {"enabled": score_trace_cfg}
+        self._score_trace_enabled = bool(score_trace_cfg.get("enabled", True))
+        self._score_trace_dir = str(score_trace_cfg.get("dir", "data/logs/score_traces"))
+
         # Pose similarity comparator
         from direct_compare.pose_similarity import PoseSimilarity
         self._score_method = self.config.get("score_method", "direct")
@@ -254,6 +307,7 @@ class GameEngine:
                 input_layout=scratch_cfg.get("input_layout", "BTJC"),
                 top_k=scratch_cfg.get("top_k", 3),
                 candidate_stride=scratch_cfg.get("candidate_stride", 3),
+                similarity_threshold=scratch_cfg.get("similarity_threshold", 0.70),
             )
             self._pose_comparator = None
             self._fallback_pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)
@@ -286,6 +340,7 @@ class GameEngine:
                 input_layout=embedding_cfg.get("input_layout", "BTJC"),
                 top_k=embedding_cfg.get("top_k", 3),
                 candidate_stride=embedding_cfg.get("candidate_stride", 3),
+                similarity_threshold=embedding_cfg.get("similarity_threshold", 0.70),
             )
             self._pose_comparator = None
             self._fallback_pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)
@@ -682,7 +737,8 @@ class GameEngine:
         # ── 화면별 포커스 버튼 목록 정의 ──────────────────────────────
         FOCUS_LISTS = {
             GameState.MENU:       ["btn_practice", "btn_challenge", "btn_freestyle",
-                                   "btn_leaderboard", "btn_settings", "btn_quit"],
+                                   "btn_multi_play", "btn_leaderboard", "btn_settings", "btn_quit"],
+            GameState.WAITING:    ["btn_waiting_cancel"],
             GameState.PAUSED:     ["btn_pause", "btn_gameplay_menu"],
             GameState.RESULT:     ["btn_retry", "btn_result_songs", "btn_result_menu"],
             GameState.SETTINGS:   ["btn_settings_vol_down", "btn_settings_vol_up", "btn_back"],
@@ -717,6 +773,9 @@ class GameEngine:
             if not fl:
                 return
             idx = idx % len(fl)
+            # 네비게이션 효과음
+            if "select" in self._sfx:
+                self._sfx_channel_select.play(self._sfx["select"])
             if self.state == GameState.MENU:
                 self._menu_focus_idx = idx
             elif self.state == GameState.SONG_SELECT:
@@ -738,7 +797,12 @@ class GameEngine:
 
         def _go_back():
             """B키 / ESC 뒤로가기."""
-            if self.state in (GameState.SONG_SELECT, GameState.SETTINGS, GameState.LEADERBOARD):
+            if self.state == GameState.WAITING:
+                if self._multi_discovery:
+                    self._multi_discovery.stop()
+                self._is_multi_mode = False
+                self.transition_to(GameState.MENU)
+            elif self.state in (GameState.SONG_SELECT, GameState.SETTINGS, GameState.LEADERBOARD):
                 self.transition_to(GameState.MENU)
             elif self.state in (GameState.READY, GameState.COUNTDOWN):
                 self.transition_to(GameState.SONG_SELECT)
@@ -974,6 +1038,10 @@ class GameEngine:
 
     def _on_button_press(self, btn_name: str):
         """버튼 이름에 따라 액션 실행."""
+        # 클릭 효과음 — 전용 채널로 즉시 재생 (이전 재생 즉시 중단)
+        if "click" in self._sfx:
+            self._sfx_channel.play(self._sfx["click"])
+
         # ── 메뉴 화면 버튼 ──
         if btn_name == "btn_practice":
             self._current_mode = "practice"
@@ -991,6 +1059,10 @@ class GameEngine:
             self.transition_to(GameState.SETTINGS)
         elif btn_name == "btn_leaderboard":
             self.transition_to(GameState.LEADERBOARD)
+        elif btn_name == "btn_multi_play":
+            self._is_multi_mode = True
+            self._current_mode = "practice"
+            self.transition_to(GameState.WAITING)
         elif btn_name == "btn_quit":
             self.running = False
 
@@ -1001,6 +1073,9 @@ class GameEngine:
             songs = self._songs_for_mode(self._current_mode)
             if songs:
                 self._current_song = songs[self._selected_song_idx]
+            # 멀티플레이 HOST면 CLIENT에게 곡 정보 전송
+            if self._is_multi_mode and self._multi_role == "host" and self._multi_socket:
+                self._multi_socket.send_song(self._current_song.get("id", ""))
             self.transition_to(GameState.READY)
         elif btn_name.startswith("btn_song_"):
             try:
@@ -1063,6 +1138,11 @@ class GameEngine:
         # ── 설정/카운트다운/준비 화면 버튼 ──
         elif btn_name == "btn_back":
             self.transition_to(GameState.MENU)
+        elif btn_name == "btn_waiting_cancel":
+            if self._multi_discovery:
+                self._multi_discovery.stop()
+            self._is_multi_mode = False
+            self.transition_to(GameState.MENU)
         elif btn_name == "btn_settings_vol_down":
             self._bgm_volume = max(0.0, round(self._bgm_volume - 0.1, 1))
             pygame.mixer.music.set_volume(self._bgm_volume)
@@ -1085,7 +1165,10 @@ class GameEngine:
         if self._last_feedback is not None:
             self._feedback_age += 1.0 / self.TARGET_FPS
 
-        if self.state == GameState.READY:
+        if self.state == GameState.WAITING:
+            self._update_waiting()
+
+        elif self.state == GameState.READY:
             self._update_ready()
 
         elif self.state == GameState.COUNTDOWN:
@@ -1152,6 +1235,143 @@ class GameEngine:
             return 0.0
         return max(0.0, float(self._timing_offset_max_penalty))
 
+    @staticmethod
+    def _sanitize_log_token(value):
+        token = str(value or "unknown").strip()
+        safe = []
+        for ch in token:
+            safe.append(ch if ch.isalnum() or ch in ("-", "_") else "_")
+        return "".join(safe).strip("_") or "unknown"
+
+    def _resolve_project_root(self):
+        return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    @staticmethod
+    def _landmarks_to_list(landmarks):
+        if landmarks is None:
+            return None
+        import numpy as np
+
+        arr = np.asarray(landmarks, dtype=np.float32)
+        return np.round(arr, 6).tolist()
+
+    def _open_score_trace_log(self):
+        if not self._score_trace_enabled:
+            return
+        self._close_score_trace_log()
+
+        project_root = self._resolve_project_root()
+        log_dir = self._score_trace_dir
+        if not os.path.isabs(log_dir):
+            log_dir = os.path.join(project_root, log_dir)
+        os.makedirs(log_dir, exist_ok=True)
+
+        song = self._current_song or {}
+        song_id = self._sanitize_log_token(
+            song.get("id") or song.get("title") or os.path.basename(song.get("path", "")) or "song"
+        )
+        mode = self._sanitize_log_token(self._current_mode or "unknown")
+        started_at = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._score_trace_path = os.path.join(
+            log_dir, f"score_trace_{song_id}_{mode}_{started_at}.jsonl"
+        )
+        self._score_trace_file = open(self._score_trace_path, "a", encoding="utf-8")
+        print(f"[INFO] Score trace logging -> {self._score_trace_path}")
+
+    def _close_score_trace_log(self):
+        if self._score_trace_file is None:
+            return
+        try:
+            self._score_trace_file.flush()
+            self._score_trace_file.close()
+        except Exception:
+            pass
+        self._score_trace_file = None
+
+    def _debug_info_for_score_source(self, score_source):
+        if score_source in ("scratch", "scratch_cache"):
+            return dict(getattr(self._scratch_comparator, "_last_debug_info", None) or {})
+        if score_source in ("embedding", "embedding_cache"):
+            return dict(getattr(self._embedding_comparator, "_last_debug_info", None) or {})
+        if score_source in ("direct", "scratch_fallback_direct", "embedding_fallback_direct"):
+            return dict(self._last_similarity_debug or {})
+        if score_source == "missing_pose_penalty":
+            return {"current_reference_index": int(self._ref_current_idx)}
+        return {}
+
+    def _write_score_trace(self, similarity, evaluation, user_landmarks, score_source):
+        if not self._score_trace_enabled or self._score_trace_file is None:
+            return
+
+        debug_info = self._debug_info_for_score_source(score_source)
+        similarity_metric = debug_info.get("method")
+        if not similarity_metric:
+            if score_source in ("scratch", "scratch_cache", "embedding", "embedding_cache"):
+                similarity_metric = "cosine"
+            elif score_source in ("scratch_fallback_direct", "embedding_fallback_direct"):
+                similarity_metric = self._fallback_similarity_method
+            elif score_source == "missing_pose_penalty":
+                similarity_metric = "penalty"
+            else:
+                similarity_metric = self._similarity_method
+        current_reference_index = debug_info.get("current_reference_index")
+        if current_reference_index is None and self._ref_frame_landmarks is not None:
+            current_reference_index = int(self._ref_current_idx)
+
+        matched_reference_index = (
+            debug_info.get("best_candidate_index")
+            if debug_info.get("best_candidate_index") is not None
+            else debug_info.get("best_reference_index")
+        )
+
+        matched_reference_landmarks = None
+        if (
+            matched_reference_index is not None
+            and self._ref_landmarks is not None
+            and 0 <= int(matched_reference_index) < len(self._ref_landmarks)
+        ):
+            matched_reference_landmarks = self._ref_landmarks[int(matched_reference_index)]
+
+        record = {
+            "event": "score_tick",
+            "logged_at": datetime.now().isoformat(timespec="milliseconds"),
+            "song_id": (self._current_song or {}).get("id"),
+            "song_title": (self._current_song or {}).get("title"),
+            "mode": self._current_mode,
+            "state": self.state,
+            "score_method": self._score_method,
+            "score_source": score_source,
+            "similarity_metric": similarity_metric,
+            "similarity": float(similarity),
+            "evaluation": evaluation,
+            "elapsed_time_sec": round(
+                float(getattr(self._current_session, "elapsed_time", 0.0) or 0.0), 3
+            ),
+            "reference_index_current": (
+                int(current_reference_index) if current_reference_index is not None else None
+            ),
+            "reference_index_matched": (
+                int(matched_reference_index) if matched_reference_index is not None else None
+            ),
+            "user_landmarks": self._landmarks_to_list(user_landmarks),
+            "reference_landmarks_current": self._landmarks_to_list(self._ref_frame_landmarks),
+            "reference_landmarks_matched": self._landmarks_to_list(matched_reference_landmarks),
+            "similarity_debug": debug_info,
+        }
+
+        try:
+            self._score_trace_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+            self._score_trace_file.flush()
+        except Exception as exc:
+            print(f"[WARN] Score trace write failed: {exc}")
+
+    def _print_terminal_similarity(self, similarity):
+        try:
+            self._last_terminal_similarity = float(similarity)
+            print(f"\rSIM {self._last_terminal_similarity:.3f}", end="", flush=True)
+        except Exception:
+            pass
+
     def _should_apply_missing_pose_penalty(self):
         """Return True when a scoring tick should count as a Miss for no pose."""
         if not self._missing_pose_penalty_enabled:
@@ -1186,7 +1406,7 @@ class GameEngine:
         start_idx = max(0, self._ref_current_idx - tolerance_frames)
         end_idx = self._ref_current_idx + 1
 
-        best_sims = []
+        scored_candidates = []
         timing_penalty = self._timing_penalty_value()
         for ri in range(start_idx, end_idx):
             ref_lm = self._ref_landmarks[ri]
@@ -1194,20 +1414,32 @@ class GameEngine:
             if timing_penalty > 0.0 and tolerance_frames > 0:
                 offset = abs(self._ref_current_idx - ri)
                 sim -= timing_penalty * min(offset / tolerance_frames, 1.0)
-            best_sims.append(float(max(0.0, min(1.0, sim))))
-        if not best_sims:
+            scored_candidates.append((int(ri), float(max(0.0, min(1.0, sim)))))
+        if not scored_candidates:
+            self._last_similarity_debug = None
             return None
 
-        best_sims.sort(reverse=True)
-        top_k = best_sims[:min(3, len(best_sims))]
-        sim = sum(top_k) / len(top_k)
+        scored_candidates.sort(key=lambda item: item[1], reverse=True)
+        top_k = scored_candidates[:min(3, len(scored_candidates))]
+        sim = sum(score for _, score in top_k) / len(top_k)
+        self._last_similarity_debug = {
+            "method": method,
+            "current_reference_index": int(self._ref_current_idx),
+            "best_reference_index": int(top_k[0][0]),
+            "best_reference_similarity": float(top_k[0][1]),
+            "top_candidates": [
+                {"reference_index": int(idx), "similarity": float(score)}
+                for idx, score in top_k
+            ],
+            "returned_similarity": float(sim),
+        }
 
         if debug:
             sim_now = self._pose_similarity_with_method(
                 comparator, user_landmarks, self._ref_frame_landmarks, method)
             print(
                 f"\r[DBG] now={sim_now:.3f} top3={sim:.3f} "
-                f"max={best_sims[0]:.3f} win={end_idx-start_idx}f",
+                f"max={top_k[0][1]:.3f} win={end_idx-start_idx}f",
                 end="",
             )
         return sim
@@ -1267,6 +1499,7 @@ class GameEngine:
         #   매 프레임: buffer_frame()으로 포즈 버퍼 축적
         #   N프레임마다: compute_from_buffer()로 모델 추론 + 점수 산출
         sim = None
+        score_source = None
         if self._current_mode != "freestyle":
             if scoring_landmarks is not None:
                 # ── 매 프레임: 버퍼 축적 ──
@@ -1279,17 +1512,20 @@ class GameEngine:
             self._scoring_frame_counter += 1
             if self._scoring_frame_counter >= self._scoring_interval:
                 self._scoring_frame_counter = 0
+                self._last_similarity_debug = None
 
                 if self._ref_frame_landmarks is not None:
                     if scoring_landmarks is None:
                         if self._should_apply_missing_pose_penalty():
                             sim = self._missing_pose_similarity
+                            score_source = "missing_pose_penalty"
                     elif self._score_method == "direct":
                         sim = self._direct_window_similarity(
                             scoring_landmarks,
                             method=self._similarity_method,
                             debug=True,
                         )
+                        score_source = "direct"
                     elif self._score_method == "scratch":
                         tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
                         sim = self._scratch_comparator.compute_from_buffer(
@@ -1298,11 +1534,15 @@ class GameEngine:
                             tolerance_frames=tolerance_frames,
                             timing_penalty=self._timing_penalty_value(),
                         )
+                        if sim is not None:
+                            score_source = "scratch"
                         if sim is None and self._model_warmup_direct_fallback:
                             sim = self._direct_window_similarity(
                                 scoring_landmarks,
                                 method=self._fallback_similarity_method,
                             )
+                            if sim is not None:
+                                score_source = "scratch_fallback_direct"
                     else:
                         tolerance_frames = int(self._tolerance_delay * self.TARGET_FPS)
                         sim = self._embedding_comparator.compute_from_buffer(
@@ -1311,11 +1551,15 @@ class GameEngine:
                             tolerance_frames=tolerance_frames,
                             timing_penalty=self._timing_penalty_value(),
                         )
+                        if sim is not None:
+                            score_source = "embedding"
                         if sim is None and self._model_warmup_direct_fallback:
                             sim = self._direct_window_similarity(
                                 scoring_landmarks,
                                 method=self._fallback_similarity_method,
                             )
+                            if sim is not None:
+                                score_source = "embedding_fallback_direct"
                 else:
                     if scoring_landmarks is None:
                         pass
@@ -1329,7 +1573,10 @@ class GameEngine:
                         sim = min(float(np.mean(visible)), 1.0) if len(visible) else 0.0
 
         if sim is not None:
+            if self._score_method != "direct":
+                self._print_terminal_similarity(sim)
             evaluation = self._scorer.evaluate(sim)
+            self._write_score_trace(sim, evaluation, scoring_landmarks, score_source or "unknown")
             fb = self._feedback_gen.generate(evaluation)
             if fb:
                 self._last_feedback = fb
@@ -1370,6 +1617,28 @@ class GameEngine:
                 self._result_data = self._scorer.get_final_result()
                 self.transition_to(GameState.RESULT)
 
+        # ── 멀티플레이: 점수 전송 (판정 주기와 동기화) ────────────
+        if self._is_multi_mode and self._multi_socket and self._current_session:
+            if self._scoring_frame_counter == 0:   # 판정 직후
+                self._multi_socket.send_score(
+                    score=int(self._scorer.total_score),
+                    combo=int(self._scorer.combo),
+                    grade=str(self._last_feedback.get("text", "") if self._last_feedback else ""),
+                )
+
+    def _update_waiting(self):
+        """WAITING 상태 처리 — HOST 연결 후 SONG_SELECT 이동, CLIENT 곡 수신 후 READY 이동."""
+        if self._multi_found:
+            self._multi_found = False
+            if self._multi_role == "host":
+                # HOST: 곡 선택 화면으로 이동
+                self.transition_to(GameState.SONG_SELECT)
+            else:
+                # CLIENT: 곡을 수신했으면 바로 READY로
+                if self._current_song:
+                    self.transition_to(GameState.READY)
+                # 곡 정보 수신 전이면 계속 대기 (다음 프레임에 재확인)
+
     def _render(self):
         """Render current frame to display."""
 
@@ -1380,6 +1649,8 @@ class GameEngine:
 
         if self.state == GameState.MENU:
             self._render_menu(w, h)
+        elif self.state == GameState.WAITING:
+            self._render_waiting(w, h)
         elif self.state == GameState.SONG_SELECT:
             self._render_song_select(w, h)
         elif self.state == GameState.READY:
@@ -1399,6 +1670,64 @@ class GameEngine:
             self._render_leaderboard(w, h)
 
         pygame.display.flip()
+
+    def _render_waiting(self, w, h):
+        """MULTI PLAY 상대방 탐색 중 화면."""
+        import math
+        tick = self._neon_tick
+
+        # 배경
+        self._display.fill((6, 4, 18))
+        for y in range(h):
+            t = y / h
+            pygame.draw.line(self._display, (int(18+10*t), int(4+4*t), int(40+15*t)), (0, y), (w, y))
+
+        # 스피너 (원형 점 회전)
+        cx, cy = w // 2, h // 2 - 40
+        r_spin = 36
+        num_dots = 10
+        for i in range(num_dots):
+            angle = math.radians(i * (360 / num_dots) + tick * 180)
+            dx = int(cx + r_spin * math.cos(angle))
+            dy = int(cy + r_spin * math.sin(angle))
+            alpha = int(60 + 195 * (i / num_dots))
+            col = (int(255 * alpha / 255), int(80 * alpha / 255), int(180 * alpha / 255))
+            pygame.draw.circle(self._display, col, (dx, dy), 5)
+
+        # 타이틀
+        title_col = self._neon_color((255, 80, 160), tick)
+        title_surf = self._fonts["result_big"].render("MULTI PLAY", True, title_col)
+        self._display.blit(title_surf, title_surf.get_rect(center=(w // 2, h // 2 - 110)))
+
+        # 상태 메시지
+        msg = getattr(self, '_multi_status_msg', '상대방 탐색 중...')
+        msg_col = (220, 220, 255) if not self._multi_timed_out else (255, 80, 80)
+        msg_surf = self._fonts["body"].render(msg, True, msg_col)
+        self._display.blit(msg_surf, msg_surf.get_rect(center=(w // 2, h // 2 + 20)))
+
+        # 역할 표시 (연결 후)
+        if self._multi_role:
+            role_txt = "HOST  — 곡을 선택해주세요" if self._multi_role == "host" \
+                       else "CLIENT — HOST의 곡 선택 대기 중..."
+            role_col = self._neon_color((255, 220, 60) if self._multi_role == "host" else (80, 200, 255), tick)
+            role_surf = self._fonts["body"].render(role_txt, True, role_col)
+            self._display.blit(role_surf, role_surf.get_rect(center=(w // 2, h // 2 + 60)))
+
+        # CANCEL 버튼
+        cancel_rect = pygame.Rect(w // 2 - 100, h // 2 + 110, 200, 44)
+        self._btn_rects["btn_waiting_cancel"] = cancel_rect
+        hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
+        bg = (80, 20, 20) if hover else (30, 10, 10)
+        pygame.draw.rect(self._display, bg, cancel_rect, border_radius=10)
+        border_col = self._neon_color((255, 80, 80), tick) if hover else (120, 40, 40)
+        self._draw_neon_rect(self._display, cancel_rect, border_col, width=2, radius=10, glow_radius=6)
+        cancel_lbl = self._fonts["small_retro"].render("CANCEL", True, (255, 255, 255))
+        self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
+
+        # 하단 안내
+        hint_col = (80, 70, 100)
+        hint = self._fonts["small_retro"].render("ESC: 취소", True, hint_col)
+        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 24)))
 
     def _render_menu(self, w, h):
         """Render the main menu — retro-fancy neon style."""
@@ -1422,21 +1751,21 @@ class GameEngine:
             pygame.draw.line(self._display, grid_color, (0, gy), (w, gy))
 
         # ── 레이아웃 ─────────────────────────────────────────────
-        MARGIN_TOP    = 24
-        BTN_H         = 54
-        BTN_W         = min(440, w - 60)
-        SMALL_BTN_H   = 42
-        SMALL_BTN_W   = min(190, (BTN_W - 20) // 2)
-        FOOTER_H      = 26
-        MARGIN_BOTTOM = 36
-        title_area_h  = 110
+        MARGIN_TOP    = 20
+        BTN_H         = 44
+        BTN_W         = min(400, w - 60)
+        SMALL_BTN_H   = 36
+        SMALL_BTN_W   = min(170, (BTN_W - 20) // 2)
+        FOOTER_H      = 22
+        MARGIN_BOTTOM = 28
+        title_area_h  = 106
 
-        mode_area_top    = MARGIN_TOP + title_area_h + 16
-        bottom_area_h    = SMALL_BTN_H + FOOTER_H + 14
+        mode_area_top    = MARGIN_TOP + title_area_h + 10
+        bottom_area_h    = SMALL_BTN_H + FOOTER_H + 12
         mode_area_bottom = h - MARGIN_BOTTOM - bottom_area_h
         mode_area_h      = mode_area_bottom - mode_area_top
-        num_btns         = 4
-        gap              = max(10, (mode_area_h - num_btns * BTN_H) // (num_btns + 1))
+        num_btns         = 5
+        gap              = max(6, (mode_area_h - num_btns * BTN_H) // (num_btns + 1))
         btn_start_y      = mode_area_top + (mode_area_h - (num_btns * BTN_H + gap * (num_btns - 1))) // 2
         btn_x            = w // 2 - BTN_W // 2
 
@@ -1447,18 +1776,18 @@ class GameEngine:
         glow_surf = self._fonts["title"].render("Let's Dance!", True, (30, 120, 100))
         for dx, dy in [(-2,0),(2,0),(0,-2),(0,2)]:
             self._display.blit(glow_surf, glow_surf.get_rect(
-                center=(w // 2 + dx, MARGIN_TOP + 38 + dy)))
-        self._display.blit(title_surf, title_surf.get_rect(center=(w // 2, MARGIN_TOP + 38)))
+                center=(w // 2 + dx, MARGIN_TOP + 34 + dy)))
+        self._display.blit(title_surf, title_surf.get_rect(center=(w // 2, MARGIN_TOP + 34)))
 
         sub_color = self._neon_color((230, 160, 255), tick, intensity=0.9)
         sub = self._fonts["body"].render("* AI DANCE SCORE GAME *", True, sub_color)
-        self._display.blit(sub, sub.get_rect(center=(w // 2, MARGIN_TOP + 82)))
+        self._display.blit(sub, sub.get_rect(center=(w // 2, MARGIN_TOP + 76)))
 
         # 구분선
         line_col = self._neon_color((180, 80, 255), tick, 0.7)
         pygame.draw.line(self._display, line_col,
-                         (w//2 - BTN_W//2, MARGIN_TOP + 100),
-                         (w//2 + BTN_W//2, MARGIN_TOP + 100), 1)
+                         (w//2 - BTN_W//2, MARGIN_TOP + 96),
+                         (w//2 + BTN_W//2, MARGIN_TOP + 96), 1)
 
         # ── 모드 버튼 ────────────────────────────────────────────
         mouse_pos = pygame.mouse.get_pos()
@@ -1466,6 +1795,7 @@ class GameEngine:
             ("btn_practice",    "PRACTICE",    (0, 220, 180),   (0, 80, 60)),
             ("btn_challenge",   "CHALLENGE",   (255, 190, 0),   (90, 60, 0)),
             ("btn_freestyle",   "FREE STYLE",  (200, 100, 255), (70, 20, 100)),
+            ("btn_multi_play",  "MULTI PLAY",  (255, 80, 160),  (90, 15, 50)),
             ("btn_leaderboard", "LEADERBOARD", (80, 180, 255),  (10, 50, 90)),
         ]
 
@@ -1519,8 +1849,8 @@ class GameEngine:
         self._btn_rects["btn_quit"]     = btn_q_rect
 
         small_defs = [
-            (btn_s_rect, "btn_settings", "SETTINGS", (100, 120, 255), 4),
-            (btn_q_rect, "btn_quit",     "QUIT",     (255, 80,  80),  5),
+            (btn_s_rect, "btn_settings", "SETTINGS", (100, 120, 255), 5),
+            (btn_q_rect, "btn_quit",     "QUIT",     (255, 80,  80),  6),
         ]
         for rect, bname, label, ncol, focus_i in small_defs:
             focused = (self._menu_focus_idx == focus_i)
@@ -2345,6 +2675,79 @@ class GameEngine:
             f"{int(remain_s // 60):02d}:{int(remain_s % 60):02d}", True, (160, 160, 200))
         self._display.blit(time_lbl, time_lbl.get_rect(midleft=(bar_x + bar_w_total + 8, ROW2_Y + 4)))
 
+        # ══════════════════════════════════════════════════════
+        #  멀티플레이 상대방 점수 오버레이 (우측 하단 패널, 화면 미가림)
+        # ══════════════════════════════════════════════════════
+        if self._is_multi_mode and self._multi_socket:
+            self._render_opponent_score_overlay(w, h, HEADER_H, fy)
+
+    def _render_opponent_score_overlay(self, w, h, header_h, footer_y):
+        """게임 화면 오른쪽 하단 구석에 상대방 점수를 작은 패널로 표시.
+
+        패널 크기: 약 180×80px — 화면 콘텐츠(카메라/가이드)를 가리지 않는 위치.
+        """
+        sock = self._multi_socket
+        if sock is None:
+            return
+
+        PAD = 8
+        PANEL_W = 188
+        PANEL_H = 78
+        # 오른쪽 패널(가이드 영역) 안쪽 하단 구석
+        px = w - PANEL_W - 10
+        py = footer_y - PANEL_H - 8
+
+        tick = self._neon_tick
+
+        # 반투명 배경
+        bg_surf = pygame.Surface((PANEL_W, PANEL_H), pygame.SRCALPHA)
+        bg_surf.fill((8, 4, 22, 200))
+        self._display.blit(bg_surf, (px, py))
+
+        # 테두리 색: 연결 중=분홍, 연결 끊김=회색
+        if sock.opponent_connected:
+            border_col = self._neon_color((255, 80, 160), tick, 0.8)
+        else:
+            border_col = (80, 80, 80)
+        panel_rect = pygame.Rect(px, py, PANEL_W, PANEL_H)
+        self._draw_neon_rect(self._display, panel_rect, border_col,
+                             width=2, radius=8, glow_radius=4)
+
+        # "OPPONENT" 레이블
+        lbl = self._fonts["small_retro"].render("OPPONENT", True, (200, 140, 200))
+        self._display.blit(lbl, (px + PAD, py + PAD))
+
+        # 연결 상태 표시 (점)
+        dot_col = (0, 255, 120) if sock.opponent_connected else (120, 120, 120)
+        pygame.draw.circle(self._display, dot_col, (px + PANEL_W - PAD - 5, py + PAD + 6), 5)
+
+        # 점수
+        score_col = self._neon_color((255, 120, 200), tick)
+        score_txt = f"{int(sock.opponent_score):06d}"
+        score_surf = self._fonts["score"].render(score_txt, True, score_col)
+        # score 폰트가 클 수 있으니 스케일 다운 (PANEL_W - 2*PAD 기준)
+        max_w = PANEL_W - PAD * 2
+        if score_surf.get_width() > max_w:
+            scale = max_w / score_surf.get_width()
+            score_surf = pygame.transform.smoothscale(
+                score_surf,
+                (int(score_surf.get_width() * scale), int(score_surf.get_height() * scale))
+            )
+        self._display.blit(score_surf, (px + PAD, py + PAD + 18))
+
+        # 콤보 + 최근 등급
+        combo_val = sock.opponent_combo
+        grade_txt = sock.opponent_grade
+        detail_parts = []
+        if combo_val > 0:
+            detail_parts.append(f"{combo_val}x")
+        if grade_txt:
+            detail_parts.append(grade_txt)
+        if detail_parts:
+            detail_col = (200, 200, 255)
+            detail_surf = self._fonts["small_retro"].render(" ".join(detail_parts), True, detail_col)
+            self._display.blit(detail_surf, (px + PAD, py + PANEL_H - PAD - detail_surf.get_height()))
+
     def _update_and_draw_particles(self):
         """파티클 업데이트 + 화면 그리기."""
         import math
@@ -2547,6 +2950,27 @@ class GameEngine:
         for dx, dy in [(-3,0),(3,0),(0,-3),(0,3)]:
             self._display.blit(glow, glow.get_rect(center=(w // 2 + dx, MARGIN_TOP + 30 + dy)))
         self._display.blit(title, title.get_rect(center=(w // 2, MARGIN_TOP + 30)))
+
+        # ── 멀티플레이 결과: 승/패 배지 ──────────────────────────
+        if self._is_multi_mode and self._multi_socket:
+            my_score  = (self._result_data or {}).get("total_score", 0)
+            opp_score = self._multi_socket.opponent_final_score
+            if self._multi_socket.opponent_finished or opp_score > 0:
+                if my_score > opp_score:
+                    vs_txt, vs_col = "WIN!", (0, 255, 150)
+                elif my_score < opp_score:
+                    vs_txt, vs_col = "LOSE...", (255, 80, 80)
+                else:
+                    vs_txt, vs_col = "DRAW", (255, 220, 0)
+                vs_surf = self._fonts["result_big"].render(vs_txt, True, self._neon_color(vs_col, tick))
+                self._display.blit(vs_surf, vs_surf.get_rect(midleft=(16, MARGIN_TOP + 30)))
+                opp_txt = self._fonts["small_retro"].render(
+                    f"OPPONENT: {int(opp_score):06d}", True, (200, 160, 200))
+                self._display.blit(opp_txt, opp_txt.get_rect(midleft=(16, MARGIN_TOP + 58)))
+            else:
+                wait_surf = self._fonts["small_retro"].render(
+                    "Waiting opponent...", True, (150, 150, 180))
+                self._display.blit(wait_surf, wait_surf.get_rect(midleft=(16, MARGIN_TOP + 30)))
 
         # 모드 배지
         mode_colors = {"practice": (0,220,180), "challenge": (255,190,0), "freestyle": (200,100,255)}
@@ -2999,6 +3423,56 @@ class GameEngine:
             "←/→: VOL  U/D: SELECT  ENTER: OK  ESC: BACK", True, (100,100,130))
         self._display.blit(hint, hint.get_rect(center=(w//2, h - MARGIN_BOTTOM + 10)))
 
+    # ── 멀티플레이 Discovery 콜백 (백그라운드 스레드에서 호출됨) ──────────────
+
+    def _on_multi_found(self, role: str, opponent_ip: str):
+        """상대방 탐색 성공 — 백그라운드 스레드에서 호출."""
+        self._multi_role = role
+        self._multi_opponent_ip = opponent_ip
+        self._multi_discovery = None
+
+        # GameSocket 생성 + 시작
+        from network.game_socket import GameSocket
+        sock = GameSocket(opponent_ip)
+        sock.on_disconnect = self._on_multi_disconnect
+        sock.on_opponent_finish = lambda: None  # 결과 화면에서 처리
+        if role == "client":
+            # CLIENT는 HOST의 곡 선택을 수신해서 자동으로 진행
+            sock.on_song_select = self._on_multi_song_received
+        sock.start()
+        self._multi_socket = sock
+
+        self._multi_found = True
+        self._multi_status_msg = f"연결됨! ({role.upper()}) — {opponent_ip}"
+        print(f"[MULTI] 상대방 발견: role={role} ip={opponent_ip}", flush=True)
+
+        # HOST: 곡 선택 화면으로 이동 (메인 스레드에서 처리하기 위해 플래그만 설정)
+        # CLIENT: WAITING 화면에서 HOST의 곡 선택 대기
+
+    def _on_multi_timeout(self):
+        """탐색 시간 초과 — 백그라운드 스레드에서 호출."""
+        self._multi_timed_out = True
+        self._multi_status_msg = "탐색 시간 초과. ESC로 돌아가세요."
+        print("[MULTI] 탐색 시간 초과", flush=True)
+
+    def _on_multi_status(self, msg: str):
+        """탐색 상태 메시지 업데이트."""
+        self._multi_status_msg = msg
+
+    def _on_multi_disconnect(self):
+        """게임 중 연결 끊김."""
+        print("[MULTI] 상대방 연결 끊김", flush=True)
+
+    def _on_multi_song_received(self, song_id: str):
+        """CLIENT: HOST가 선택한 곡을 수신 — 백그라운드 스레드에서 호출."""
+        # 곡 목록에서 song_id와 일치하는 곡 찾기
+        for song in self._songs:
+            if song.get("id") == song_id:
+                self._current_song = song
+                break
+        self._multi_found = True  # WAITING 화면 루프에서 진행 트리거로 재사용
+        print(f"[MULTI] HOST 곡 수신: {song_id}", flush=True)
+
     def transition_to(self, new_state: str):
         """Transition to a new game state."""
         old_state = self.state
@@ -3016,12 +3490,24 @@ class GameEngine:
         self._feedback_age = 0.0
 
         if state == GameState.MENU:
+            self._close_score_trace_log()
             self._menu_focus_idx = 0
             # 게임 중 메뉴로 돌아오면 음악 정지
             if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
                 pygame.mixer.music.stop()
             self._release_reference_assets()
+            # 멀티플레이 정리
+            if self._multi_socket:
+                self._multi_socket.stop()
+                self._multi_socket = None
+            if self._multi_discovery:
+                self._multi_discovery.stop()
+                self._multi_discovery = None
+            self._is_multi_mode = False
+            self._multi_role = ""
+            self._multi_opponent_ip = ""
         elif state == GameState.SONG_SELECT:
+            self._close_score_trace_log()
             self._selected_song_idx = 0
             self._song_focus_idx = 0
             self._song_depth = 1            # 곡 선택 창 진입 시 항상 depth1로 초기화
@@ -3051,6 +3537,8 @@ class GameEngine:
             if resuming_from_pause:
                 pygame.mixer.music.unpause()
             else:
+                if self._current_mode != "freestyle":
+                    self._open_score_trace_log()
                 # 새 게임 시작: 이전 세션 완전 정리
                 if self._current_session is not None:
                     self._current_session.is_active = False
@@ -3108,11 +3596,25 @@ class GameEngine:
                     self._current_mode,
                 )
                 self._current_session.start()
+
+                # 멀티플레이: 소켓이 이미 있으면 상대 점수 리셋
+                if self._is_multi_mode and self._multi_socket:
+                    self._multi_socket.opponent_score = 0
+                    self._multi_socket.opponent_combo = 0
+                    self._multi_socket.opponent_grade = ""
+                    self._multi_socket.opponent_finished = False
+
         elif state == GameState.PAUSED:
             # 일시정지 — 현재 세션 타이머는 계속 흐름 (추후 개선 가능)
             pygame.mixer.music.pause()
         elif state == GameState.RESULT:
+            self._close_score_trace_log()
             self._result_data = self._scorer.get_final_result()
+            # 멀티플레이: 최종 점수 전송
+            if self._is_multi_mode and self._multi_socket:
+                self._multi_socket.send_end(
+                    int(self._result_data.get("total_score", 0))
+                )
             # 프리스타일은 저장 안 함 / 그 외는 이름 입력 오버레이 표시
             if self._current_mode != "freestyle":
                 self._name_input_active = True
@@ -3126,6 +3628,17 @@ class GameEngine:
         elif state == GameState.LEADERBOARD:
             self._leaderboard_load()
             self._generic_focus_idx = 0
+        elif state == GameState.WAITING:
+            self._multi_found = False
+            self._multi_timed_out = False
+            self._multi_status_msg = "상대방 탐색 중..."
+            from network.discovery import Discovery
+            self._multi_discovery = Discovery()
+            self._multi_discovery.find_opponent(
+                on_found=self._on_multi_found,
+                on_timeout=self._on_multi_timeout,
+                on_status=self._on_multi_status,
+            )
 
     def _play_song_preview(self, song: dict):
         """곡 선택 시 오디오 미리듣기."""
@@ -3397,6 +3910,7 @@ class GameEngine:
             return
         self._shutdown_done = True
         self.running = False
+        self._close_score_trace_log()
         if getattr(self, '_async_camera', None) is not None:
             self._async_camera.stop()
         if getattr(self, '_async_video_player', None):

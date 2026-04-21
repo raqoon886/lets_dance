@@ -214,11 +214,14 @@ class PoseSimilarity:
 
         # 각도 차이 (라디안). 최대 π (180도)
         diff = np.abs(angles_a - angles_b)
-        mean_diff = np.mean(diff)
+        
+        # 단순히 평균을 내면 안 움직인 관절(오차0)이 섞여서 큰 오차가 희석됨. (가만히 서있기 꼼수 방지)
+        # 제곱 평균(MSE)을 사용하여 틀린 관절이 하나라도 크게 어긋나면 치명적인 감점을 부여함.
+        mean_sq_diff = np.mean(diff ** 2)
 
-        # 지수 감쇠: 차이가 클수록 급격히 떨어짐
-        # 0° → 1.0, 15° → 0.72, 30° → 0.52, 45° → 0.37, 90° → 0.14
-        similarity = float(np.exp(-2.0 * mean_diff))
+        # 지수 감쇠(Gaussian): 사람 몸의 자연스러운 전체적 오차(약 15도)는 허용하고,
+        # 하나라도 45도 이상 기괴하게 꺾여 있다면 확 떨어지도록 설계.
+        similarity = float(np.exp(-3.0 * mean_sq_diff))
         return float(np.clip(similarity, 0.0, 1.0))
 
     def compare_sequence(self, seq_a: list, seq_b: list) -> list:

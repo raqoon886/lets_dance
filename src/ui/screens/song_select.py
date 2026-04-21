@@ -61,7 +61,24 @@ class SongSelectScreen:
             {'action': 'start', 'song': song_data} or
             {'action': 'back'} or None
         """
-        # TODO: LEFT/RIGHT to browse, ENTER to select, ESC to go back
+        import pygame
+
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_LEFT:
+                    self._selected_index = max(0, self._selected_index - 1)
+                elif event.key == pygame.K_RIGHT:
+                    self._selected_index = min(len(self._songs) - 1, self._selected_index + 1)
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.app.play_sfx("click")
+                    return {"action": "start", "song": self.selected_song}
+                elif event.key == pygame.K_ESCAPE:
+                    self.app.play_sfx("click")
+                    return {"action": "back"}
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                # TODO: check event.pos against song card / start button rects when defined
+                self.app.play_sfx("click")
+
         return None
 
     def render(self, display, game_state: dict):

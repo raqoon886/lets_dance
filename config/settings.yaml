@@ -14,7 +14,7 @@ pose:
 
 embedding:
   model_dir: "data/models/embedding"
-  model_name: "embedding_gcn_e64_triplet"
+  model_name: "finetune_tcn_base_infonce_e64"   # pretrain+finetune 결과 기본값
   model_path: ""              # optional direct .tflite path; empty uses registry/model_name
   use_reference_cache: true
   reference_cache_dir: "data/cache/reference_embeddings"
@@ -23,10 +23,11 @@ embedding:
   input_layout: "BTJC"
   top_k: 3
   candidate_stride: 3
+  similarity_threshold: 0.70  # raw cosine floor; below→0, above→stretched to [0,1]
 
 scratch:
   model_dir: "data/models/scratch"
-  model_name: "my_gcn_e64_bce"
+  model_name: "scratch_mlp_small_infonce"
   model_path: ""              # optional direct .tflite path; empty uses registry/model_name
   use_reference_cache: true
   reference_cache_dir: "data/cache/reference_embeddings"
@@ -35,6 +36,7 @@ scratch:
   input_layout: "BTJC"        # BTJC=[1,T,J,C], BJTC=[1,J,T,C], BTC=[1,T,J*C]
   top_k: 3
   candidate_stride: 3
+  similarity_threshold: 0.70  # raw cosine floor; below→0, above→stretched to [0,1]
 
 scoring:
   similarity_metric: "cosine"  # cosine, euclidean, dtw
@@ -59,6 +61,11 @@ runtime_smoothing:
   score_hold_seconds: 0.3          # keep the last feedback visible briefly when no new score is produced
   model_warmup_direct_fallback: true
   fallback_similarity: "angle"     # direct fallback used while scratch/embedding windows are not ready
+
+logging:
+  score_trace:
+    enabled: false
+    dir: "data/logs/score_traces"  # 점수 판정 tick마다 정답/유저 스켈레톤과 similarity를 JSONL로 저장
 
 game:
   countdown_seconds: 3

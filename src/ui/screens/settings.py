@@ -77,5 +77,23 @@ class SettingsScreen:
         Returns:
             'back', 'save', 'reset', or None
         """
-        # TODO: Navigate settings, modify values, save/cancel
+        import pygame
+
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    self.app.play_sfx("click")
+                    return "back"
+                elif event.key == pygame.K_s:
+                    self.app.play_sfx("click")
+                    self.save_settings()
+                    return "save"
+                elif event.key == pygame.K_r:
+                    self.app.play_sfx("click")
+                    self.load_settings()
+                    return "reset"
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                # TODO: check event.pos against Save/Reset/Back button rects when defined
+                self.app.play_sfx("click")
+
         return None

@@ -43,7 +43,7 @@ class ScratchPoseSimilarity:
 
     def __init__(self, model_path: str, sequence_length=30, feature_dims=2,
                  input_layout="BTJC", target_joints=None, top_k=3,
-                 candidate_stride=3, interpreter=None):
+                 candidate_stride=3, interpreter=None, similarity_threshold=0.70):
         if input_layout not in self.LAYOUTS:
             raise ValueError(f"input_layout must be one of {self.LAYOUTS}: {input_layout}")
 
@@ -54,6 +54,7 @@ class ScratchPoseSimilarity:
         self.target_joints = list(target_joints or DANCE_JOINTS)
         self.top_k = max(1, int(top_k))
         self.candidate_stride = max(1, int(candidate_stride))
+        self.similarity_threshold = float(similarity_threshold)
 
         self._user_buffer = deque(maxlen=self.sequence_length)
         self._ref_embedding_cache = {}
@@ -64,6 +65,7 @@ class ScratchPoseSimilarity:
         self._precomputed_ref_index_to_pos = {}
         self._precomputed_ref_meta = None
         self._precomputed_ref_path = None
+        self._last_debug_info = None
 
         if interpreter is None:
             self._load_interpreter()
@@ -75,6 +77,7 @@ class ScratchPoseSimilarity:
         self._user_buffer.clear()
         self._ref_embedding_cache.clear()
         self.clear_reference_embedding_cache()
+        self._last_debug_info = None
 
     def clear_reference_embedding_cache(self):
         """Clear the disk-backed reference embedding cache for the current song."""
@@ -144,54 +147,112 @@ class ScratchPoseSimilarity:
                 for end_idx in candidate_indices
             ]
 
-        sims = self._apply_timing_penalty(
+        scored_candidates = self._apply_timing_penalty(
             sims,
             candidate_indices,
             reference_index,
             tolerance_frames,
             timing_penalty,
+            self.similarity_threshold,
         )
-        if not sims:
+        if not scored_candidates:
+            self._last_debug_info = {
+                "current_reference_index": int(reference_index),
+                "candidate_indices": [int(idx) for idx in candidate_indices],
+                "best_candidate_index": None,
+                "best_candidate_similarity": 0.0,
+                "returned_similarity": 0.0,
+            }
             return 0.0
-        sims.sort(reverse=True)
-        return float(np.mean(sims[:min(self.top_k, len(sims))]))
+        scored_candidates.sort(key=lambda item: item[1], reverse=True)
+        top_candidates = scored_candidates[:min(self.top_k, len(scored_candidates))]
+        returned_similarity = float(np.mean([score for _, score in top_candidates]))
+        best_candidate_index, best_candidate_similarity = top_candidates[0]
+        self._last_debug_info = {
+            "current_reference_index": int(reference_index),
+            "candidate_indices": [int(idx) for idx in candidate_indices],
+            "best_candidate_index": int(best_candidate_index),
+            "best_candidate_similarity": float(best_candidate_similarity),
+            "returned_similarity": returned_similarity,
+            "top_candidates": [
+                {"reference_index": int(idx), "similarity": float(score)}
+                for idx, score in top_candidates
+            ],
+        }
+        return returned_similarity
 
     @staticmethod
     def _apply_timing_penalty(sims, candidate_indices, reference_index,
-                              tolerance_frames, timing_penalty):
-        """Penalize otherwise-good matches that are far from the current beat."""
+                              tolerance_frames, timing_penalty, similarity_threshold=0.0):
+        """Scale similarities and penalize matches far from the current beat."""
         timing_penalty = max(0.0, float(timing_penalty or 0.0))
         tolerance_frames = max(0, int(tolerance_frames or 0))
         scored = []
         for sim, end_idx in zip(np.asarray(sims).reshape(-1), candidate_indices):
             if not np.isfinite(sim):
                 continue
+                
             adjusted = float(sim)
+            
+            # 1. Similarity Rescaling: expand discriminative range using threshold
+            if similarity_threshold > 0.0:
+                if adjusted <= similarity_threshold:
+                    adjusted = 0.0
+                elif similarity_threshold < 1.0:
+                    adjusted = (adjusted - similarity_threshold) / (1.0 - similarity_threshold)
+
+            # 2. Timing Penalty: non-linear (quadratic) decay within tolerance
             if timing_penalty > 0.0 and tolerance_frames > 0:
                 offset = abs(int(reference_index) - int(end_idx))
-                adjusted -= timing_penalty * min(offset / tolerance_frames, 1.0)
-            scored.append(float(np.clip(adjusted, 0.0, 1.0)))
+                penalty_ratio = min(offset / tolerance_frames, 1.0)
+                adjusted -= timing_penalty * (penalty_ratio ** 2)
+                
+            scored.append((int(end_idx), float(np.clip(adjusted, 0.0, 1.0))))
         return scored
 
     def _load_interpreter(self):
         if not self.model_path or not os.path.exists(self.model_path):
             raise FileNotFoundError(f"Scratch TFLite model not found: {self.model_path}")
-        try:
-            from tflite_runtime.interpreter import Interpreter
-        except ImportError:
-            try:
-                import tensorflow as tf
-                Interpreter = tf.lite.Interpreter
-            except ImportError as exc:
-                raise ImportError(
-                    "Scratch scoring requires tflite-runtime or tensorflow. "
-                    "Install tflite-runtime for runtime, or tensorflow for training/dev."
-                ) from exc
+        Interpreter, backend = self._resolve_interpreter()
 
-        self._interpreter = Interpreter(model_path=self.model_path)
+        try:
+            self._interpreter = Interpreter(model_path=self.model_path)
+        except ValueError as exc:
+            if backend == "tflite-runtime" and "Didn't find op" in str(exc):
+                raise ValueError(
+                    "The installed tflite-runtime package is too old for this "
+                    "TFLite model. Install ai-edge-litert, or re-export the model "
+                    "with the same TensorFlow/TFLite version used by the runtime."
+                ) from exc
+            raise
+
         self._resize_dynamic_input()
         self._interpreter.allocate_tensors()
         self._refresh_io_details()
+
+    @staticmethod
+    def _resolve_interpreter():
+        try:
+            from ai_edge_litert.interpreter import Interpreter
+            return Interpreter, "ai-edge-litert"
+        except ImportError:
+            pass
+
+        try:
+            import tensorflow as tf
+            return tf.lite.Interpreter, "tensorflow"
+        except ImportError:
+            pass
+
+        try:
+            from tflite_runtime.interpreter import Interpreter
+            return Interpreter, "tflite-runtime"
+        except ImportError as exc:
+            raise ImportError(
+                "Scratch scoring requires ai-edge-litert, tensorflow, or "
+                "tflite-runtime. Install ai-edge-litert for the lightweight "
+                "runtime, or tensorflow for training/dev."
+            ) from exc
 
     def _resize_dynamic_input(self):
         details = self._interpreter.get_input_details()
@@ -246,6 +307,7 @@ class ScratchPoseSimilarity:
                     target_joints=self.target_joints,
                     top_k=self.top_k,
                     candidate_stride=self.candidate_stride,
+                    similarity_threshold=self.similarity_threshold,
                 )
                 # 원본 캐시 참조(공유). Python dict 삽입은 Thread-safe
                 temp_encoder._ref_embedding_cache = self._ref_embedding_cache

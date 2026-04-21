@@ -96,5 +96,16 @@ class GameplayScreen:
 
     def handle_input(self, events: list) -> str:
         """Handle gameplay input (pause, quit)."""
-        # TODO: ESC to pause, SPACE to pause
+        import pygame
+
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_ESCAPE, pygame.K_SPACE):
+                    self.app.play_sfx("click")
+                    return "pause"
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                # TODO: check event.pos against pause button rect when defined
+                self.app.play_sfx("click")
+                return "pause"
+
         return None
