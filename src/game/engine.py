@@ -111,7 +111,8 @@ class GameEngine:
         self._current_mode: str = "practice"   # practice | challenge | freestyle
         self._current_song: dict = {}
         # 가이드 캐릭터용 참조 랜드마크
-        self._ref_landmarks = None          # shape (N, 33, 4)
+        self._ref_landmarks = None          # shape (N, 33, 4) — 채점용 (x-flip 적용)
+        self._ref_landmarks_display = None  # shape (N, 33, 4) — 렌더링용 (원본)
         self._ref_frame_landmarks = None    # shape (33, 4) — 현재 프레임
         self._ref_current_idx = 0           # 현재 참조 프레임 인덱스
         # 레퍼런스 영상 (mp4)
@@ -321,7 +322,7 @@ class GameEngine:
                 input_layout=scratch_cfg.get("input_layout", "BTJC"),
                 top_k=scratch_cfg.get("top_k", 3),
                 candidate_stride=scratch_cfg.get("candidate_stride", 3),
-                similarity_threshold=scratch_cfg.get("similarity_threshold", 0.70),
+                similarity_threshold=scratch_cfg.get("similarity_threshold", 0),
             )
             self._pose_comparator = None
             self._fallback_pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)
@@ -354,7 +355,7 @@ class GameEngine:
                 input_layout=embedding_cfg.get("input_layout", "BTJC"),
                 top_k=embedding_cfg.get("top_k", 3),
                 candidate_stride=embedding_cfg.get("candidate_stride", 3),
-                similarity_threshold=embedding_cfg.get("similarity_threshold", 0.70),
+                similarity_threshold=embedding_cfg.get("similarity_threshold", 0),
             )
             self._pose_comparator = None
             self._fallback_pose_comparator = PoseSimilarity(use_key_joints_only=True, normalize=True)
@@ -1614,7 +1615,8 @@ class GameEngine:
                 int(self._current_session.elapsed_time * self.TARGET_FPS),
                 len(self._ref_landmarks) - 1,
             )
-            self._ref_frame_landmarks = self._ref_landmarks[fi]
+            display_src = getattr(self, '_ref_landmarks_display', self._ref_landmarks)
+            self._ref_frame_landmarks = display_src[fi]
             self._ref_current_idx = fi
 
         # 레퍼런스 영상 프레임 — 변경 시에만 Surface 재생성 (tobytes 호출 최소화)
@@ -4188,6 +4190,7 @@ class GameEngine:
     def _release_reference_assets(self):
         """이전 곡의 리소스를 해제합니다."""
         self._ref_landmarks = None
+        self._ref_landmarks_display = None
         self._ref_frame_landmarks = None
         if getattr(self, '_async_video_player', None) is not None:
             self._async_video_player.stop()
@@ -4214,7 +4217,15 @@ class GameEngine:
                 if ref_data.ndim == 3 and ref_data.shape[2] == 3:
                     vis = np.ones((*ref_data.shape[:2], 1), dtype=np.float32)
                     ref_data = np.concatenate([ref_data, vis], axis=2)
-                self._ref_landmarks = ref_data.astype(np.float32)
+                ref_data = ref_data.astype(np.float32)
+                # 렌더링용은 원본 좌표 그대로 유지
+                self._ref_landmarks_display = ref_data.copy()
+                # 서비스는 cv2.flip(frame, 1) 후 MediaPipe를 실행하므로 (거울 모드),
+                # reference.npy는 원본 영상(flip 없음)에서 추출됐기 때문에 x축이 반대.
+                # 채점용은 x를 반전해서 유저 포즈와 좌표계를 일치시킨다.
+                ref_data_scoring = ref_data.copy()
+                ref_data_scoring[:, :, 0] = 1.0 - ref_data_scoring[:, :, 0]
+                self._ref_landmarks = ref_data_scoring
                 # Reference embedding cache가 있으면 디스크에서 로드하고,
                 # 없으면 기존처럼 백그라운드 TFLite warmup으로 fallback한다.
                 dance_name = os.path.basename(self._current_song["path"])

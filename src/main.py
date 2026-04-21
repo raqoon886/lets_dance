@@ -43,8 +43,8 @@ def main():
                         help="레퍼런스 .npy 파일과 실시간 비교 모드 실행")
     parser.add_argument("--score-method", "-s",
                         choices=["direct", "embedding", "scratch"],
-                        default="direct",
-                        help="유사도 계산 방식: direct / embedding / scratch(TFLite 모델) (기본: direct)")
+                        default="scratch",
+                        help="유사도 계산 방식: direct / embedding / scratch(TFLite 모델) (기본: scratch)")
     parser.add_argument("--similarity", "-S",
                         choices=["cosine", "euclidean", "hybrid", "angle"],
                         default="angle",
