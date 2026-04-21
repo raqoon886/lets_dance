@@ -3662,7 +3662,6 @@ class GameEngine:
 
         hint = self._fonts["small_retro"].render(
             "←/→: TAB  ↑/↓: SELECT  ENTER: DELETE/CONFIRM  ESC: BACK", True, (120, 110, 160))
-            "←/→: SWITCH TAB   ↑/↓: SCROLL   ENTER/ESC/B: BACK", True, (120, 110, 160))
         self._display.blit(hint, hint.get_rect(center=(w//2, h - 22)))
 
     def _render_settings(self, w, h):
