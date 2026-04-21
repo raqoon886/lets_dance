@@ -76,9 +76,9 @@ class GameSocket:
         except OSError:
             pass
 
-    def send_song(self, song_id: str):
-        """HOST가 선택한 곡 ID를 CLIENT에 전송."""
-        self._send(make_msg(MSG_SONG_SELECT, song_id=song_id))
+    def send_song(self, song_id: str, mode: str = "practice"):
+        """HOST가 선택한 곡 ID와 모드를 CLIENT에 전송."""
+        self._send(make_msg(MSG_SONG_SELECT, song_id=song_id, mode=mode))
 
     def send_start(self):
         """HOST가 카운트다운 시작 신호를 CLIENT에 전송."""
@@ -137,8 +137,9 @@ class GameSocket:
 
             elif mtype == MSG_SONG_SELECT:
                 song_id = str(msg.get("song_id", ""))
+                mode    = str(msg.get("mode", "practice"))
                 if song_id and self.on_song_select:
-                    self.on_song_select(song_id)
+                    self.on_song_select(song_id, mode)
 
             elif mtype == MSG_GAME_START:
                 if self.on_game_start:
