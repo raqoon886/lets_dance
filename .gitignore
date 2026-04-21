@@ -27,6 +27,8 @@ Thumbs.db
 # Logs
 *.log
 logs/
+data/logs/
+data/logs/score_traces/
 
 # Leaderboard (기기마다 기록이 다르므로 제외)
 data/leaderboard.json
