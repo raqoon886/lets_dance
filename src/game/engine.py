@@ -927,8 +927,14 @@ class GameEngine:
                     if self.state == GameState.SONG_SELECT and self._song_depth == 2:
                         pass  # depth2에선 ↓ 무시
                     elif self.state == GameState.LEADERBOARD and self._generic_focus_idx == 0:
-                        # 콘텐츠 포커스: 행 선택 이동
-                        self._lb_selected_row += 1
+                        # 콘텐츠 포커스: 행 선택 이동, 마지막 행 넘으면 DELETE ALL로
+                        filtered = self._lb_get_filtered_entries()
+                        max_idx = max(0, len(filtered) - 1)
+                        if self._lb_selected_row >= max_idx:
+                            # 마지막 행 → DELETE ALL 버튼으로 포커스 이동
+                            self._generic_focus_idx = 1
+                        else:
+                            self._lb_selected_row += 1
                         self._lb_confirm_delete = None
                     else:
                         cnt = _focus_count()
@@ -941,16 +947,19 @@ class GameEngine:
                 elif event.key == pygame.K_UP:
                     if self.state == GameState.SONG_SELECT and self._song_depth == 2:
                         self._song_depth = 1   # ↑ → depth1으로 돌아가기
-                    elif self.state == GameState.LEADERBOARD and self._generic_focus_idx == 0:
-                        # 콘텐츠 포커스: 행 선택 이동
-                        self._lb_selected_row = max(0, self._lb_selected_row - 1)
+                    elif self.state == GameState.LEADERBOARD:
+                        if self._generic_focus_idx > 0:
+                            # 버튼 → 콘텐츠 복귀: 마지막 행 선택
+                            self._generic_focus_idx = 0
+                            filtered = self._lb_get_filtered_entries()
+                            self._lb_selected_row = max(0, len(filtered) - 1)
+                        else:
+                            self._lb_selected_row = max(0, self._lb_selected_row - 1)
                         self._lb_confirm_delete = None
                     else:
                         cnt = _focus_count()
                         if cnt:
                             _set_focus_idx(_get_focus_idx() - 1)
-                        if self.state == GameState.LEADERBOARD:
-                            self._lb_confirm_delete = None
 
                 # → : LEADERBOARD=탭 이동(콘텐츠 포커스 시), SETTINGS=볼륨업, 그 외=↓와 동일
                 elif event.key == pygame.K_RIGHT:
@@ -959,6 +968,9 @@ class GameEngine:
                             tabs = ["all", "practice", "challenge", "freestyle"]
                             cur = tabs.index(self._leaderboard_tab) if self._leaderboard_tab in tabs else 0
                             self._leaderboard_tab = tabs[(cur + 1) % len(tabs)]
+                        else:  # DELETE ALL(1) ↔ BACK(2)
+                            self._generic_focus_idx = 1 if self._generic_focus_idx == 2 else 2
+                            self._lb_confirm_delete = None
                     elif self.state == GameState.SETTINGS:
                         self._on_button_press("btn_settings_vol_up")
                     else:
@@ -975,6 +987,9 @@ class GameEngine:
                             tabs = ["all", "practice", "challenge", "freestyle"]
                             cur = tabs.index(self._leaderboard_tab) if self._leaderboard_tab in tabs else 0
                             self._leaderboard_tab = tabs[(cur - 1) % len(tabs)]
+                        else:  # DELETE ALL(1) ↔ BACK(2)
+                            self._generic_focus_idx = 1 if self._generic_focus_idx == 2 else 2
+                            self._lb_confirm_delete = None
                     elif self.state == GameState.SETTINGS:
                         self._on_button_press("btn_settings_vol_down")
                     else:
@@ -3177,15 +3192,13 @@ class GameEngine:
                     self._fmt_lb_date(entry.get("date", "")),
                 ]
                 for vi, (val, vx) in enumerate(zip(vals, header_xs)):
-                    vs = self._fonts["small_retro"].render(val, True, row_col)
-                    self._display.blit(vs, (vx, ry))
-
-                # 확인 대기 중이면 "press again" 표시
-                if is_confirm:
-                    del_hint = self._fonts["small_retro"].render(
-                        "ENTER to confirm", True, (255, 80, 80))
-                    self._display.blit(del_hint, del_hint.get_rect(
-                        midright=(w - 20, ry + ROW_H // 2)))
+                    # 확인 대기 중이면 DATE 열 대신 "DEL?" 표시
+                    if is_confirm and vi == 5:  # DATE 열
+                        ds = self._fonts["small_retro"].render("DEL?", True, (255, 80, 80))
+                        self._display.blit(ds, (vx, ry))
+                    else:
+                        vs = self._fonts["small_retro"].render(val, True, row_col)
+                        self._display.blit(vs, (vx, ry))
 
         # ── 하단 버튼: DELETE ALL / BACK ──────────────────────────
         mouse_pos = pygame.mouse.get_pos()
@@ -3211,7 +3224,15 @@ class GameEngine:
             del_bg = (60, 20, 35)
             del_border = (130, 60, 80)
         pygame.draw.rect(self._display, del_bg, del_all_rect, border_radius=12)
-        pygame.draw.rect(self._display, del_border, del_all_rect, 2 if not del_focused else 3, border_radius=12)
+        if del_focused or del_hover or del_confirming:
+            neon_col = self._neon_color((255, 80, 80), tick) if del_confirming else (255, 100, 100)
+            self._draw_neon_rect(self._display, del_all_rect, neon_col,
+                                 width=3, radius=12, glow_radius=8)
+            bracket_col = self._neon_color((255, 80, 80), tick * 2) if del_confirming else self._neon_color((255, 120, 120), tick * 2)
+            self._draw_corner_brackets(self._display, del_all_rect,
+                                       bracket_col, size=12, width=3)
+        else:
+            pygame.draw.rect(self._display, del_border, del_all_rect, 2, border_radius=12)
         del_lbl_text = "[DELETE ALL?]" if del_confirming else "DELETE ALL"
         del_lbl_col = (255, 255, 255) if (del_focused or del_hover or del_confirming) else (180, 120, 140)
         del_lbl = self._fonts["btn_retro"].render(del_lbl_text, True, del_lbl_col)
