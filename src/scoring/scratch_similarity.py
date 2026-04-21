@@ -213,6 +213,16 @@ class ScratchPoseSimilarity:
     def _load_interpreter(self):
         if not self.model_path or not os.path.exists(self.model_path):
             raise FileNotFoundError(f"Scratch TFLite model not found: {self.model_path}")
+            
+        if self.model_path.endswith('.onnx'):
+            import onnxruntime as ort
+            self._is_onnx = True
+            self._onnx_session = ort.InferenceSession(self.model_path, providers=['CPUExecutionProvider'])
+            self._input_details = [{"name": self._onnx_session.get_inputs()[0].name, "index": 0}]
+            self._output_details = [{"name": self._onnx_session.get_outputs()[0].name, "index": 0}]
+            return
+            
+        self._is_onnx = False
         Interpreter, backend = self._resolve_interpreter()
 
         try:
@@ -456,6 +466,15 @@ class ScratchPoseSimilarity:
     def _infer_single(self, sequence):
         detail = self._input_details[0]
         tensor = self._format_input(sequence)
+        
+        if getattr(self, "_is_onnx", False):
+            ort_inputs = {detail["name"]: tensor}
+            ort_outs = self._onnx_session.run([self._output_details[0]["name"]], ort_inputs)
+            out = ort_outs[0]
+            if out.shape[-1] > 64:
+                out = out[..., :64]
+            return np.nan_to_num(np.asarray(out, dtype=np.float32).reshape(-1))
+            
         tensor = self._fit_to_shape(tensor, detail)
         tensor = self._quantize_if_needed(tensor, detail)
         self._interpreter.set_tensor(detail["index"], tensor)
