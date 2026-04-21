@@ -25,6 +25,7 @@ class AsyncVideoPlayer:
         
         self._latest_frame_rgb = None
         self._current_frame_idx = 0
+        self._frame_seq = 0
         
         # 내부 fallback 타이머용
         self._fallback_start_time = 0.0
@@ -96,6 +97,7 @@ class AsyncVideoPlayer:
                     # 스레드 안전하게 최신 프레임 갱신
                     with self.lock:
                         self._latest_frame_rgb = frame_rgb
+                        self._frame_seq += 1
             else:
                 # 다음 프레임이 올 때까지 휴식 (CPU 절약)
                 time.sleep(0.005)
@@ -104,6 +106,11 @@ class AsyncVideoPlayer:
         """메인 스레드에서 안전하게 가져갈 수 있는 1개의 프레임 반환"""
         with self.lock:
             return self._latest_frame_rgb
+
+    def get_latest_frame_with_seq(self):
+        """프레임과 시퀀스 번호를 반환. Surface 캐싱으로 불필요한 변환 방지용."""
+        with self.lock:
+            return self._latest_frame_rgb, self._frame_seq
 
     def reset_position(self):
         """음악을 처음부터 다시 시작할 때 위치를 동기화"""

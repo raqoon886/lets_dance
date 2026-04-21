@@ -56,7 +56,10 @@ class ScratchPoseSimilarity:
         self.candidate_stride = max(1, int(candidate_stride))
         self.similarity_threshold = float(similarity_threshold)
 
-        self._user_buffer = deque(maxlen=self.sequence_length)
+        # Ring buffer — deque + np.stack 대비 메모리 복사 최소화
+        self._ring_buffer = None   # lazy init (shape unknown until first frame)
+        self._ring_idx = 0
+        self._ring_count = 0
         self._ref_embedding_cache = {}
         self._interpreter = interpreter
         self._input_details = None
@@ -74,7 +77,9 @@ class ScratchPoseSimilarity:
 
     def reset(self):
         """Clear rolling user window and cached reference embeddings."""
-        self._user_buffer.clear()
+        self._ring_buffer = None
+        self._ring_idx = 0
+        self._ring_count = 0
         self._ref_embedding_cache.clear()
         self.clear_reference_embedding_cache()
         self._last_debug_info = None
@@ -112,11 +117,18 @@ class ScratchPoseSimilarity:
         """
         if user_landmarks is None:
             return
-        self._user_buffer.append(normalize_pose_landmarks(
+        normalized = normalize_pose_landmarks(
             user_landmarks,
             target_joints=self.target_joints,
             feature_dims=self.feature_dims,
-        ))
+        )
+        if self._ring_buffer is None:
+            J, C = normalized.shape
+            self._ring_buffer = np.zeros(
+                (self.sequence_length, J, C), dtype=np.float32)
+        self._ring_buffer[self._ring_idx] = normalized
+        self._ring_idx = (self._ring_idx + 1) % self.sequence_length
+        self._ring_count = min(self._ring_count + 1, self.sequence_length)
 
     def compute_from_buffer(self, reference_sequence: np.ndarray,
                             reference_index: int, tolerance_frames: int = 0,
@@ -127,10 +139,11 @@ class ScratchPoseSimilarity:
         """
         if reference_sequence is None:
             return None
-        if len(self._user_buffer) < self.sequence_length:
+        if self._ring_count < self.sequence_length:
             return None
 
-        user_window = np.stack(list(self._user_buffer), axis=0).astype(np.float32)
+        # Ring buffer → chronological order (single copy via np.roll)
+        user_window = np.roll(self._ring_buffer, -self._ring_idx, axis=0)
         candidate_indices = self._candidate_reference_indices(
             len(reference_sequence), reference_index, tolerance_frames)
         if not candidate_indices:
