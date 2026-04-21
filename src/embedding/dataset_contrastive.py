@@ -72,6 +72,99 @@ def _load_and_process(npy_path: Path, feature_dims: int) -> np.ndarray | None:
     return normalize_pose(arr)
 
 
+def sample_candidate_indices(num_frames: int, reference_index: int,
+                             tolerance_frames: int, stride: int = 1,
+                             min_end_index: int = 0) -> List[int]:
+    """Match the runtime candidate-window search around a target frame index."""
+    num_frames = int(num_frames)
+    reference_index = int(reference_index)
+    tolerance_frames = max(0, int(tolerance_frames))
+    stride = max(1, int(stride))
+    min_end_index = max(0, int(min_end_index))
+    if num_frames <= 0:
+        return []
+
+    lo = max(min_end_index, reference_index - tolerance_frames)
+    hi = min(num_frames - 1, reference_index + tolerance_frames)
+    if hi < lo:
+        return []
+
+    indices = list(range(lo, hi + 1, stride))
+    if reference_index < lo or reference_index > hi:
+        return indices
+    if reference_index not in indices:
+        indices.append(reference_index)
+        indices.sort()
+    return indices
+
+
+def _apply_joint_dropout(window: np.ndarray, rng: np.random.Generator,
+                         dropout_prob: float) -> np.ndarray:
+    if dropout_prob <= 0.0:
+        return window
+    out = window.astype(np.float32, copy=True)
+    T, J, _ = out.shape
+    drop_mask = rng.random((T, J)) < float(dropout_prob)
+    for t in range(T):
+        for j in range(J):
+            if not drop_mask[t, j]:
+                continue
+            if t > 0 and rng.random() < 0.7:
+                out[t, j] = out[t - 1, j]
+            else:
+                out[t, j] = 0.0
+    return out
+
+
+def _apply_frame_hold(window: np.ndarray, rng: np.random.Generator,
+                      hold_prob: float) -> np.ndarray:
+    if hold_prob <= 0.0:
+        return window
+    out = window.astype(np.float32, copy=True)
+    for t in range(1, len(out)):
+        if rng.random() < float(hold_prob):
+            out[t] = out[t - 1]
+    return out
+
+
+def _apply_temporal_warp(window: np.ndarray, rng: np.random.Generator,
+                         warp_prob: float, warp_strength: float) -> np.ndarray:
+    if warp_prob <= 0.0 or warp_strength <= 0.0 or rng.random() >= float(warp_prob):
+        return window
+
+    out = np.empty_like(window, dtype=np.float32)
+    T = int(window.shape[0])
+    if T <= 2:
+        return window.astype(np.float32, copy=True)
+
+    base = np.arange(T, dtype=np.float32)
+    center = 0.5 * (T - 1)
+    scale = float(rng.uniform(max(0.5, 1.0 - warp_strength), 1.0 + warp_strength))
+    shift = float(rng.uniform(-warp_strength, warp_strength) * (T - 1) * 0.25)
+    positions = np.clip(center + (base - center) / scale + shift, 0.0, float(T - 1))
+
+    for j in range(window.shape[1]):
+        for c in range(window.shape[2]):
+            out[:, j, c] = np.interp(positions, base, window[:, j, c]).astype(np.float32)
+    return out
+
+
+def apply_runtime_window_augment(window: np.ndarray, rng: np.random.Generator,
+                                 gaussian_sigma: float = 0.0,
+                                 joint_dropout_prob: float = 0.0,
+                                 frame_hold_prob: float = 0.0,
+                                 temporal_warp_prob: float = 0.0,
+                                 temporal_warp_strength: float = 0.0) -> np.ndarray:
+    """Apply lightweight detector-style corruption to a normalized pose window."""
+    out = np.asarray(window, dtype=np.float32).copy()
+    out = _apply_temporal_warp(out, rng, temporal_warp_prob, temporal_warp_strength)
+    out = _apply_frame_hold(out, rng, frame_hold_prob)
+    out = _apply_joint_dropout(out, rng, joint_dropout_prob)
+    if gaussian_sigma > 0.0:
+        out += rng.normal(0.0, gaussian_sigma, size=out.shape).astype(np.float32)
+    return np.nan_to_num(out).astype(np.float32)
+
+
 @dataclass
 class DanceBundle:
     name: str
@@ -142,8 +235,17 @@ class ContrastiveBatchGenerator:
                  sequence_length: int, batch_size: int, steps_per_epoch: int,
                  mode: str = "infonce", positive_jitter: int = 2,
                  negative_gap: int = 45, cross_song_prob: float = 0.75,
+                 false_negative_gap: int | None = None,
+                 hard_negative_min_gap: int | None = None,
+                 hard_negative_max_gap: int | None = None,
+                 hard_negative_prob: float = 0.0,
                  split: str = "train", val_fraction: float = 0.15,
-                 runtime_jitter: float = 0.0, seed: int = 42):
+                 runtime_jitter: float = 0.0,
+                 joint_dropout_prob: float = 0.0,
+                 frame_hold_prob: float = 0.0,
+                 temporal_warp_prob: float = 0.0,
+                 temporal_warp_strength: float = 0.0,
+                 seed: int = 42):
         self.store = store
         self.T = int(sequence_length)
         self.bs = int(batch_size)
@@ -153,10 +255,22 @@ class ContrastiveBatchGenerator:
         self.mode = mode
         self.pj = int(positive_jitter)
         self.neg_gap = int(negative_gap)
+        self.false_negative_gap = int(false_negative_gap or negative_gap)
+        self.hard_negative_min_gap = int(
+            hard_negative_min_gap if hard_negative_min_gap is not None
+            else max(self.pj + 2, 4))
+        self.hard_negative_max_gap = int(
+            hard_negative_max_gap if hard_negative_max_gap is not None
+            else max(self.hard_negative_min_gap, self.neg_gap))
+        self.hard_negative_prob = float(hard_negative_prob)
         self.cross_song_prob = float(cross_song_prob)
         self.split = split
         self.val_fraction = float(val_fraction)
         self.runtime_jitter = float(runtime_jitter)
+        self.joint_dropout_prob = float(joint_dropout_prob)
+        self.frame_hold_prob = float(frame_hold_prob)
+        self.temporal_warp_prob = float(temporal_warp_prob)
+        self.temporal_warp_strength = float(temporal_warp_strength)
         self.rng = random.Random(seed)
         self.np_rng = np.random.default_rng(seed + 987654321)
         self._end_ranges: List[Tuple[int, int]] = self._compute_end_ranges()
@@ -224,12 +338,7 @@ class ContrastiveBatchGenerator:
         same_song = len(self.store) < 2 or self.rng.random() >= self.cross_song_prob
         if same_song:
             i = anchor_i
-            for _ in range(20):
-                end = self._random_end(i)
-                if abs(end - anchor_end) >= self.neg_gap:
-                    break
-            else:
-                end = self._clamp_end(i, (anchor_end + self.neg_gap))
+            end = self._sample_same_song_negative_end(i, anchor_end)
         else:
             choices = [k for k in range(len(self.store)) if k != anchor_i]
             i = self.rng.choice(choices)
@@ -241,13 +350,52 @@ class ContrastiveBatchGenerator:
             seq = b.original
         return self._window(seq, end)
 
-    def _jitter(self, arr: np.ndarray) -> np.ndarray:
-        """Apply on-the-fly Gaussian noise (each batch = new noise sample)."""
-        if self.runtime_jitter <= 0.0:
-            return arr
-        noise = self.np_rng.normal(
-            0.0, self.runtime_jitter, size=arr.shape).astype(np.float32)
-        return arr + noise
+    def _sample_same_song_negative_end(self, bundle_idx: int, anchor_end: int) -> int:
+        use_hard_negative = (
+            self.hard_negative_prob > 0.0 and
+            self.rng.random() < self.hard_negative_prob and
+            self.hard_negative_max_gap >= self.hard_negative_min_gap
+        )
+        min_gap = self.hard_negative_min_gap if use_hard_negative else self.neg_gap
+        max_gap = self.hard_negative_max_gap if use_hard_negative else None
+
+        for _ in range(40):
+            end = self._random_end(bundle_idx)
+            dist = abs(end - anchor_end)
+            if dist < min_gap:
+                continue
+            if max_gap is not None and dist > max_gap:
+                continue
+            return end
+
+        if max_gap is not None:
+            target = anchor_end + max_gap if self.rng.random() < 0.5 else anchor_end - max_gap
+        else:
+            target = anchor_end + min_gap
+        return self._clamp_end(bundle_idx, target)
+
+    def _augment_windows(self, arr: np.ndarray) -> np.ndarray:
+        out = np.asarray(arr, dtype=np.float32)
+        use_runtime_aug = any([
+            self.runtime_jitter > 0.0,
+            self.joint_dropout_prob > 0.0,
+            self.frame_hold_prob > 0.0,
+            self.temporal_warp_prob > 0.0,
+        ])
+        if not use_runtime_aug:
+            return out
+        return np.stack([
+            apply_runtime_window_augment(
+                window,
+                self.np_rng,
+                gaussian_sigma=self.runtime_jitter,
+                joint_dropout_prob=self.joint_dropout_prob,
+                frame_hold_prob=self.frame_hold_prob,
+                temporal_warp_prob=self.temporal_warp_prob,
+                temporal_warp_strength=self.temporal_warp_strength,
+            )
+            for window in out
+        ], axis=0).astype(np.float32)
 
     def _generate_batch(self):
         anchors: List[np.ndarray] = []
@@ -263,11 +411,11 @@ class ContrastiveBatchGenerator:
             end_idx.append(e)
             if self.mode == "triplet":
                 negatives.append(self._sample_negative(i, e))
-        A = self._jitter(np.stack(anchors).astype(np.float32))
-        P = self._jitter(np.stack(positives).astype(np.float32))
+        A = self._augment_windows(np.stack(anchors).astype(np.float32))
+        P = self._augment_windows(np.stack(positives).astype(np.float32))
         dummy = np.zeros((self.bs,), dtype=np.float32)
         if self.mode == "triplet":
-            N = self._jitter(np.stack(negatives).astype(np.float32))
+            N = self._augment_windows(np.stack(negatives).astype(np.float32))
             return (A, P, N), dummy
         D = np.asarray(dance_idx, dtype=np.int32)
         E = np.asarray(end_idx, dtype=np.int32)
