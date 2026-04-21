@@ -62,6 +62,11 @@ runtime_smoothing:
   model_warmup_direct_fallback: true
   fallback_similarity: "angle"     # direct fallback used while scratch/embedding windows are not ready
 
+logging:
+  score_trace:
+    enabled: false
+    dir: "data/logs/score_traces"  # 점수 판정 tick마다 정답/유저 스켈레톤과 similarity를 JSONL로 저장
+
 game:
   countdown_seconds: 3
   default_mode: "practice"     # practice, challenge, freestyle
