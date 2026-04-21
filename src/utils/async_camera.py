@@ -100,7 +100,7 @@ class AsyncCameraPose:
         """
         Fetch the latest synchronized frame and pose data without blocking.
         Returns:
-            (ret, frame, landmarks, detected)
+            (ret, frame, landmarks, detected, display_seq)
         """
         # 💡 [극단적 지연 시간 소거 2] 강제 복사본 생성(copy) 제거
         # 이미 캡처 스레드에서 매번 새로운 배열이 할당되므로, 포인터만 던져줍니다. (3~5ms 즉시 단축)
@@ -117,7 +117,7 @@ class AsyncCameraPose:
             infer_seq = self._infer_frame_seq
             
             if display_frame is None and self._latest_frame is None:
-                return False, None, None, False
+                return False, None, None, False, 0
                 
             if display_frame is None:
                 display_frame = self._latest_frame
@@ -127,7 +127,7 @@ class AsyncCameraPose:
             if lag > 0:
                 print(f"\r[CAM] display=#{display_seq} infer=#{infer_seq} lag={lag}frames", end="")
 
-            return True, display_frame, landmarks, detected
+            return True, display_frame, landmarks, detected, display_seq
 
     def stop(self):
         """Gracefully stop the thread and release resources."""
