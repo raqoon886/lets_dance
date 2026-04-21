@@ -57,10 +57,10 @@ scoring:
     enabled: true             # tolerance window에서 현재 박자와 먼 후보는 감점
     max_penalty: 0.08         # tolerance window 끝 후보에 적용되는 최대 raw similarity 감점
   grade_thresholds:
-    perfect: 90
-    great: 75
-    good: 60
-    ok: 40
+    perfect: 35
+    great: 25
+    good: 15
+    ok: 1
 
 runtime_smoothing:
   pose_hold_frames: 6              # short pose-detection dropouts reuse the last valid pose
