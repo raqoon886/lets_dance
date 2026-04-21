@@ -64,7 +64,7 @@ runtime_smoothing:
 
 logging:
   score_trace:
-    enabled: true
+    enabled: false
     dir: "data/logs/score_traces"  # 점수 판정 tick마다 정답/유저 스켈레톤과 similarity를 JSONL로 저장
 
 game:

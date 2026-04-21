@@ -79,6 +79,8 @@ def main():
                         help="embedding TFLite 입력 layout")
     parser.add_argument("--embedding-candidate-stride", type=int, default=None,
                         help="embedding 정답 후보 window stride")
+    parser.add_argument("--score-trace", action="store_true",
+                        help="점수 판정 로그(JSONL) 저장 활성화")
     args = parser.parse_args()
 
     # Direct Compare 모드
@@ -120,6 +122,9 @@ def main():
         key: value for key, value in embedding_updates.items()
         if value is not None
     })
+    config.setdefault("logging", {})
+    config["logging"].setdefault("score_trace", {})
+    config["logging"]["score_trace"]["enabled"] = bool(args.score_trace)
     engine = GameEngine(config)
 
     try:
