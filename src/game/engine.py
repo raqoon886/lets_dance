@@ -138,6 +138,7 @@ class GameEngine:
         self._score_trace_file = None
         self._score_trace_path: str = ""
         self._last_similarity_debug = None
+        self._last_terminal_similarity = None
 
     def initialize(self):
         """
@@ -1224,6 +1225,13 @@ class GameEngine:
         except Exception as exc:
             print(f"[WARN] Score trace write failed: {exc}")
 
+    def _print_terminal_similarity(self, similarity):
+        try:
+            self._last_terminal_similarity = float(similarity)
+            print(f"\rSIM {self._last_terminal_similarity:.3f}", end="", flush=True)
+        except Exception:
+            pass
+
     def _should_apply_missing_pose_penalty(self):
         """Return True when a scoring tick should count as a Miss for no pose."""
         if not self._missing_pose_penalty_enabled:
@@ -1425,6 +1433,8 @@ class GameEngine:
                         sim = min(float(np.mean(visible)), 1.0) if len(visible) else 0.0
 
         if sim is not None:
+            if self._score_method != "direct":
+                self._print_terminal_similarity(sim)
             evaluation = self._scorer.evaluate(sim)
             self._write_score_trace(sim, evaluation, scoring_landmarks, score_source or "unknown")
             fb = self._feedback_gen.generate(evaluation)
