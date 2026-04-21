@@ -154,6 +154,7 @@ class GameEngine:
         self._last_terminal_similarity = None
         # ── 렌더링 성능 캐시 ──
         self._ref_video_frame_seq = -1        # 레퍼런스 영상 변경 감지용 시퀀스
+        self._rendered_cam_seq = -1           # 처리된 웹캠 프레임 시퀀스
 
         # ── 멀티플레이 ───────────────────────────────────────────────
         self._is_multi_mode: bool = False       # 현재 멀티 게임 중 여부
@@ -1255,7 +1256,7 @@ class GameEngine:
 
             # 카운트다운 중 카메라 프레임 워밍업
             if getattr(self, '_async_camera', None) is not None:
-                ret, frame, _, _ = self._async_camera.read()
+                ret, frame, _, _, _ = self._async_camera.read()
                 if ret:
                     self._current_frame = frame
 
@@ -1267,7 +1268,7 @@ class GameEngine:
     def _update_ready(self):
         """READY 상태: 비동기 카메라로부터 포즈 감지 및 카운트다운."""
         if getattr(self, '_async_camera', None) is not None:
-            ret, frame, lm, detected = self._async_camera.read()
+            ret, frame, lm, detected, seq = self._async_camera.read()
             if not ret:
                 return
 
@@ -1528,13 +1529,14 @@ class GameEngine:
         if getattr(self, '_async_camera', None) is None:
             return
 
-        ret, frame, lm, detected = self._async_camera.read()
+        ret, frame, lm, detected, seq = self._async_camera.read()
         if not ret:
             return
 
         self._current_frame = frame
         self._current_landmarks = lm
         self._pose_detected = detected
+        self._current_frame_seq = seq
 
         scoring_landmarks = None
         if self._pose_detected and self._current_landmarks is not None:
@@ -2681,46 +2683,50 @@ class GameEngine:
             cam_x_offset = left_rect.x + BORDER + (panel_w - cam_w_target) // 2
             cam_y_offset = BODY_Y + BORDER + (panel_h - cam_h_target) // 2
 
-            frame_bgr = cv2.resize(self._current_frame,
-                                   (cam_w_target, cam_h_target),
-                                   interpolation=cv2.INTER_NEAREST)
+            cur_seq = getattr(self, '_current_frame_seq', -1)
+            if cur_seq != self._rendered_cam_seq or not hasattr(self, '_cam_surf'):
+                frame_bgr = cv2.resize(self._current_frame,
+                                       (cam_w_target, cam_h_target),
+                                       interpolation=cv2.INTER_NEAREST)
 
-            # 스켈레톤을 카메라 프레임 위에 직접 그리기
-            if hasattr(self, '_pose_detected') and self._pose_detected and \
-                    self._current_landmarks is not None:
-                lm = self._current_landmarks
+                # 스켈레톤을 카메라 프레임 위에 직접 그리기
+                if hasattr(self, '_pose_detected') and self._pose_detected and \
+                        self._current_landmarks is not None:
+                    lm = self._current_landmarks
 
-                # 피드백 등급에 따라 스켈레톤 색상 결정 (BGR)
-                fb_text = (self._last_feedback or {}).get("text", "") if self._last_feedback else ""
-                _SK_COLORS = {
-                    "PERFECT!": ((0, 200, 255), (0, 180, 255), (0, 140, 210)),  # 골드
-                    "GREAT!":   ((255, 220, 0), (255, 240, 0), (200, 180, 0)),  # 시안
-                    "GOOD":     ((0, 230, 60),  (0, 255, 80),  (0, 190, 50)),   # 초록
-                    "OK":       ((0, 150, 255), (0, 140, 255), (0, 110, 200)),  # 오렌지
-                    "MISS":     ((70, 70, 200), (80, 80, 220), (50, 50, 160)),  # 빨강(dim)
-                }
-                sk_line, sk_fill, sk_ring = _SK_COLORS.get(
-                    fb_text, ((0, 255, 180), (0, 255, 255), (0, 200, 150)))  # 기본: 청록
+                    # 피드백 등급에 따라 스켈레톤 색상 결정 (BGR)
+                    fb_text = (self._last_feedback or {}).get("text", "") if self._last_feedback else ""
+                    _SK_COLORS = {
+                        "PERFECT!": ((0, 200, 255), (0, 180, 255), (0, 140, 210)),
+                        "GREAT!":   ((255, 220, 0), (255, 240, 0), (200, 180, 0)),
+                        "GOOD":     ((0, 230, 60),  (0, 255, 80),  (0, 190, 50)),
+                        "OK":       ((0, 150, 255), (0, 140, 255), (0, 110, 200)),
+                        "MISS":     ((70, 70, 200), (80, 80, 220), (50, 50, 160)),
+                    }
+                    sk_line, sk_fill, sk_ring = _SK_COLORS.get(
+                        fb_text, ((0, 255, 180), (0, 255, 255), (0, 200, 150)))
 
-                for src_j, dst_j in SKELETON_CONNECTIONS:
-                    if src_j < len(lm) and dst_j < len(lm) and \
-                       lm[src_j][3] > 0.3 and lm[dst_j][3] > 0.3:
-                        x1 = int(lm[src_j][0] * cam_w_target)
-                        y1 = int(lm[src_j][1] * cam_h_target)
-                        x2 = int(lm[dst_j][0] * cam_w_target)
-                        y2 = int(lm[dst_j][1] * cam_h_target)
-                        cv2.line(frame_bgr, (x1, y1), (x2, y2), sk_line, 3)
-                for idx in DANCE_JOINTS:
-                    if idx < len(lm) and lm[idx][3] > 0.3:
-                        cx_ = int(lm[idx][0] * cam_w_target)
-                        cy_ = int(lm[idx][1] * cam_h_target)
-                        cv2.circle(frame_bgr, (cx_, cy_), 5, sk_fill, -1)
-                        cv2.circle(frame_bgr, (cx_, cy_), 8, sk_ring, 2)
+                    for src_j, dst_j in SKELETON_CONNECTIONS:
+                        if src_j < len(lm) and dst_j < len(lm) and \
+                           lm[src_j][3] > 0.3 and lm[dst_j][3] > 0.3:
+                            x1 = int(lm[src_j][0] * cam_w_target)
+                            y1 = int(lm[src_j][1] * cam_h_target)
+                            x2 = int(lm[dst_j][0] * cam_w_target)
+                            y2 = int(lm[dst_j][1] * cam_h_target)
+                            cv2.line(frame_bgr, (x1, y1), (x2, y2), sk_line, 3)
+                    for idx in DANCE_JOINTS:
+                        if idx < len(lm) and lm[idx][3] > 0.3:
+                            cx_ = int(lm[idx][0] * cam_w_target)
+                            cy_ = int(lm[idx][1] * cam_h_target)
+                            cv2.circle(frame_bgr, (cx_, cy_), 5, sk_fill, -1)
+                            cv2.circle(frame_bgr, (cx_, cy_), 8, sk_ring, 2)
 
-            frame_rgb = frame_bgr[:, :, ::-1]
-            cam_surf = pygame.image.frombuffer(
-                frame_rgb.tobytes(), (cam_w_target, cam_h_target), "RGB")
-            self._display.blit(cam_surf, (cam_x_offset, cam_y_offset))
+                frame_rgb = frame_bgr[:, :, ::-1]
+                self._cam_surf = pygame.image.frombuffer(
+                    frame_rgb.tobytes(), (cam_w_target, cam_h_target), "RGB")
+                self._rendered_cam_seq = cur_seq
+
+            self._display.blit(self._cam_surf, (cam_x_offset, cam_y_offset))
         else:
             no_cam = self._fonts["body"].render("NO CAMERA", True, (80, 80, 110))
             self._display.blit(no_cam, no_cam.get_rect(center=left_rect.center))
