@@ -3,6 +3,7 @@
 from collections import deque
 import json
 import os
+import threading
 
 import numpy as np
 
@@ -67,6 +68,13 @@ class ScratchPoseSimilarity:
         self._precomputed_ref_path = None
         self._last_debug_info = None
 
+        # Async ONNX inference state
+        self._async_lock = threading.Lock()
+        self._async_thread = None
+        self._async_latest_similarity = None   # last completed result
+        self._async_latest_debug_info = None
+        self._async_busy = False               # True while worker is running
+
         if interpreter is None:
             self._load_interpreter()
         else:
@@ -124,12 +132,28 @@ class ScratchPoseSimilarity:
         """Run model inference on the current buffer and return similarity.
 
         Returns None if the buffer is not yet full (< sequence_length frames).
+        For ONNX mode, inference runs asynchronously in a background thread
+        so the game loop is never blocked.
         """
         if reference_sequence is None:
             return None
         if len(self._user_buffer) < self.sequence_length:
             return None
 
+        # ── ONNX async path ──────────────────────────────────────
+        if getattr(self, '_is_onnx', False):
+            return self._compute_from_buffer_async(
+                reference_sequence, reference_index,
+                tolerance_frames, timing_penalty)
+
+        # ── TFLite sync path (existing) ──────────────────────────
+        return self._compute_from_buffer_sync(
+            reference_sequence, reference_index,
+            tolerance_frames, timing_penalty)
+
+    def _compute_from_buffer_sync(self, reference_sequence, reference_index,
+                                  tolerance_frames, timing_penalty):
+        """Synchronous inference — used for TFLite models."""
         user_window = np.stack(list(self._user_buffer), axis=0).astype(np.float32)
         candidate_indices = self._candidate_reference_indices(
             len(reference_sequence), reference_index, tolerance_frames)
@@ -147,6 +171,79 @@ class ScratchPoseSimilarity:
                 for end_idx in candidate_indices
             ]
 
+        return self._score_from_sims(
+            sims, candidate_indices, reference_index,
+            tolerance_frames, timing_penalty)
+
+    def _compute_from_buffer_async(self, reference_sequence, reference_index,
+                                   tolerance_frames, timing_penalty):
+        """Non-blocking inference — dispatches work to a background thread.
+
+        Returns the latest cached result immediately. If no background job
+        is running, a new one is submitted with the current buffer snapshot.
+        """
+        # 1. Harvest completed result (if any)
+        with self._async_lock:
+            if self._async_latest_similarity is not None:
+                # A fresh result has arrived from the worker
+                result = self._async_latest_similarity
+                self._last_debug_info = self._async_latest_debug_info
+                self._async_latest_similarity = None
+                self._async_latest_debug_info = None
+                self._last_async_result = result  # cache for re-use
+
+        # 2. If worker is idle, submit a new job
+        if not self._async_busy:
+            user_window = np.stack(list(self._user_buffer), axis=0).astype(np.float32)
+            candidate_indices = self._candidate_reference_indices(
+                len(reference_sequence), reference_index, tolerance_frames)
+            if candidate_indices:
+                self._async_busy = True
+                t = threading.Thread(
+                    target=self._async_infer_worker,
+                    args=(user_window, reference_sequence, candidate_indices,
+                          reference_index, tolerance_frames, timing_penalty),
+                    daemon=True,
+                    name="onnx-async-infer",
+                )
+                t.start()
+
+        # 3. Return last known result (may be None during first warmup frames)
+        return getattr(self, '_last_async_result', None)
+
+    def _async_infer_worker(self, user_window, reference_sequence,
+                            candidate_indices, reference_index,
+                            tolerance_frames, timing_penalty):
+        """Background thread: runs ONNX inference and stores the result."""
+        try:
+            user_embedding = self._normalize_vector(self._infer_single(user_window))
+            ref_embeddings = self._reference_embeddings(
+                reference_sequence, candidate_indices)
+            if ref_embeddings is not None:
+                sims = np.dot(ref_embeddings, user_embedding)
+            else:
+                sims = [
+                    self._cosine_similarity(
+                        user_embedding,
+                        self._reference_embedding(reference_sequence, end_idx))
+                    for end_idx in candidate_indices
+                ]
+
+            similarity = self._score_from_sims(
+                sims, candidate_indices, reference_index,
+                tolerance_frames, timing_penalty)
+
+            with self._async_lock:
+                self._async_latest_similarity = similarity
+                self._async_latest_debug_info = dict(self._last_debug_info or {})
+        except Exception as exc:
+            print(f"[WARN] ONNX async inference failed: {exc}")
+        finally:
+            self._async_busy = False
+
+    def _score_from_sims(self, sims, candidate_indices, reference_index,
+                         tolerance_frames, timing_penalty):
+        """Shared scoring logic: apply timing penalty and return similarity."""
         scored_candidates = self._apply_timing_penalty(
             sims,
             candidate_indices,
