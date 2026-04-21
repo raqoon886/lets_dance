@@ -2387,33 +2387,29 @@ class GameEngine:
                                    (cam_w_target, cam_h_target),
                                    interpolation=cv2.INTER_NEAREST)
 
-            # BGR → RGB (contiguous) — [:,:,::-1].tobytes() 대비 ~2-3x 빠름
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            cam_surf = pygame.image.frombuffer(
-                frame_rgb.tobytes(), (cam_w_target, cam_h_target), "RGB")
-            self._display.blit(cam_surf, (cam_x_offset, cam_y_offset))
-
-            # 스켈레톤을 pygame.draw로 Surface 위에 직접 그리기 (cv2 draw 제거 — tobytes 비용 절감)
+            # 스켈레톤을 카메라 프레임 위에 직접 그리기
             if hasattr(self, '_pose_detected') and self._pose_detected and \
                     self._current_landmarks is not None:
                 lm = self._current_landmarks
                 for src_j, dst_j in SKELETON_CONNECTIONS:
                     if src_j < len(lm) and dst_j < len(lm) and \
                        lm[src_j][3] > 0.3 and lm[dst_j][3] > 0.3:
-                        x1 = int(lm[src_j][0] * cam_w_target) + cam_x_offset
-                        y1 = int(lm[src_j][1] * cam_h_target) + cam_y_offset
-                        x2 = int(lm[dst_j][0] * cam_w_target) + cam_x_offset
-                        y2 = int(lm[dst_j][1] * cam_h_target) + cam_y_offset
-                        pygame.draw.line(self._display, (0, 255, 180),
-                                         (x1, y1), (x2, y2), 3)
+                        x1 = int(lm[src_j][0] * cam_w_target)
+                        y1 = int(lm[src_j][1] * cam_h_target)
+                        x2 = int(lm[dst_j][0] * cam_w_target)
+                        y2 = int(lm[dst_j][1] * cam_h_target)
+                        cv2.line(frame_bgr, (x1, y1), (x2, y2), (0, 255, 180), 3)
                 for idx in DANCE_JOINTS:
                     if idx < len(lm) and lm[idx][3] > 0.3:
-                        cx_ = int(lm[idx][0] * cam_w_target) + cam_x_offset
-                        cy_ = int(lm[idx][1] * cam_h_target) + cam_y_offset
-                        pygame.draw.circle(self._display, (0, 255, 255),
-                                           (cx_, cy_), 5)
-                        pygame.draw.circle(self._display, (0, 200, 150),
-                                           (cx_, cy_), 8, 2)
+                        cx_ = int(lm[idx][0] * cam_w_target)
+                        cy_ = int(lm[idx][1] * cam_h_target)
+                        cv2.circle(frame_bgr, (cx_, cy_), 5, (0, 255, 255), -1)
+                        cv2.circle(frame_bgr, (cx_, cy_), 8, (0, 200, 150), 2)
+
+            frame_rgb = frame_bgr[:, :, ::-1]
+            cam_surf = pygame.image.frombuffer(
+                frame_rgb.tobytes(), (cam_w_target, cam_h_target), "RGB")
+            self._display.blit(cam_surf, (cam_x_offset, cam_y_offset))
         else:
             no_cam = self._fonts["body"].render("NO CAMERA", True, (80, 80, 110))
             self._display.blit(no_cam, no_cam.get_rect(center=left_rect.center))
