@@ -79,6 +79,12 @@ class GameEngine:
         self._leaderboard: list = []        # [{song_id, title, score, grade, mode, date}, ...]
         self._leaderboard_filter: str = ""  # "" = 전체, else song_id
         self._leaderboard_tab: str = "all"  # "all" | "practice" | "challenge" | "freestyle"
+        # 이름 입력 오버레이 (결과 화면 진입 시 표시)
+        self._name_input_active: bool = False  # 오버레이 표시 중 여부
+        self._name_input_text: str = ""        # 현재 입력 텍스트
+        self._player_name: str = ""            # 마지막 저장 이름 (다음 게임에 미리 채움)
+        self._stdin_text_mode: bool = False    # True이면 stdin 브리지가 문자 그대로 전달
+        self._name_btn_pending: str = ""       # 더블탭 대기 중인 버튼 이름 ("btn_name_save" | "btn_name_skip" | "")
         # 챌린지 모드 연속 MISS 카운터
         self._consecutive_miss: int = 0
         self._challenge_game_over: bool = False
@@ -403,10 +409,10 @@ class GameEngine:
         """
         import threading, sys, os as _os, termios, select
 
-        def _post(key):
+        def _post(key, uni=''):
             try:
                 pygame.event.post(pygame.event.Event(
-                    pygame.KEYDOWN, key=key, mod=0, unicode='', scancode=0))
+                    pygame.KEYDOWN, key=key, mod=0, unicode=uni, scancode=0))
             except Exception:
                 pass
 
@@ -444,14 +450,36 @@ class GameEngine:
             except Exception:
                 return   # stdin이 TTY가 아니면 종료
 
+            def _restore():
+                try:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
+                except Exception:
+                    pass
+
+            # SIGINT/SIGTERM 시 반드시 터미널 복구 (Ctrl+C로 강제 종료해도 안전)
+            import signal as _signal
+            _orig_sigint  = _signal.getsignal(_signal.SIGINT)
+            _orig_sigterm = _signal.getsignal(_signal.SIGTERM)
+            def _sig_handler(sig, frame):
+                _restore()
+                if sig == _signal.SIGINT  and callable(_orig_sigint):
+                    _orig_sigint(sig, frame)
+                if sig == _signal.SIGTERM and callable(_orig_sigterm):
+                    _orig_sigterm(sig, frame)
+                raise SystemExit(0)
+            try:
+                _signal.signal(_signal.SIGINT,  _sig_handler)
+                _signal.signal(_signal.SIGTERM, _sig_handler)
+            except Exception:
+                pass  # 메인 스레드가 아닌 경우 signal 설정 불가
+
             try:
                 new_attr = termios.tcgetattr(fd)
                 # IFLAG: 입력 처리 끄기
                 new_attr[0] = 0
-                # LFLAG: echo, canonical, 시그널 끄기
+                # LFLAG: echo, canonical 끄기. ISIG는 켜둠 → Ctrl+C가 SIGINT로 전달됨
                 new_attr[3] = new_attr[3] & ~(
-                    termios.ECHO | termios.ICANON |
-                    termios.IEXTEN | termios.ISIG)
+                    termios.ECHO | termios.ICANON | termios.IEXTEN)
                 # cc: VMIN=1 (1바이트씩), VTIME=0 (즉시)
                 new_attr[6][termios.VMIN]  = 1
                 new_attr[6][termios.VTIME] = 0
@@ -470,6 +498,25 @@ class GameEngine:
                         ch = _os.read(fd, 1)
                         if not ch:
                             break
+
+                        # ── 텍스트 입력 모드 (이름 입력 등, 영어만 지원) ──
+                        if getattr(self, '_stdin_text_mode', False):
+                            if ch in (b'\x7f', b'\x08'):  # Backspace
+                                sys.stdout.write('\b \b')
+                                sys.stdout.flush()
+                                _post(pygame.K_BACKSPACE)
+                            elif ch in (b'\r', b'\n'):     # Enter
+                                sys.stdout.write('\n')
+                                sys.stdout.flush()
+                                _post(pygame.K_RETURN)
+                            elif ch == b'\x1b':            # ESC
+                                select.select([sys.stdin], [], [], 0.08)
+                                _post(pygame.K_ESCAPE)
+                            elif 0x20 <= ch[0] <= 0x7E:   # ASCII 출력 가능 문자
+                                sys.stdout.write(ch.decode('ascii'))
+                                sys.stdout.flush()
+                                _post(0, ch.decode('ascii'))
+                            continue  # 일반 키맵 처리 건너뜀
 
                         if ch == b'\x1b':
                             # ANSI 시퀀스 판별 (방향키)
@@ -495,15 +542,19 @@ class GameEngine:
                     for line in sys.stdin:
                         if not self.running:
                             break
+                        # ── 텍스트 입력 모드 ──────────────────────────────
+                        if getattr(self, '_stdin_text_mode', False):
+                            text = line.rstrip('\r\n')
+                            for c in text:
+                                _post(0, c)
+                            _post(pygame.K_RETURN)
+                            continue
                         name = LINE_MAP.get(line.strip().lower())
                         if name:
                             _post(getattr(pygame, name))
             finally:
                 if use_raw:
-                    try:
-                        termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
-                    except Exception:
-                        pass
+                    _restore()
 
         t = threading.Thread(target=_read_keys, daemon=True, name="stdin-key-bridge")
         t.start()
@@ -696,7 +747,13 @@ class GameEngine:
             elif self.state in (GameState.PLAYING,):
                 self.transition_to(GameState.PAUSED)
             elif self.state == GameState.RESULT:
-                self.transition_to(GameState.MENU)
+                if self._name_input_active:
+                    # 이름 입력 오버레이 활성 중: ESC = 이전 이름으로 저장
+                    self._name_input_active = False
+                    self._stdin_text_mode = False
+                    self._leaderboard_save_result(player=self._player_name)
+                else:
+                    self.transition_to(GameState.MENU)
             elif self.state == GameState.MENU:
                 self.running = False
 
@@ -717,6 +774,33 @@ class GameEngine:
             # ── 키보드 ──────────────────────────────────────────
             if event.type == pygame.KEYDOWN:
                 self._last_event_type = 'keyboard'
+
+                # ── 이름 입력 오버레이 활성 중: 모든 키를 여기서 처리 ──
+                if self._name_input_active:
+                    if event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                        # ENTER → 현재 텍스트로 저장
+                        name = self._name_input_text.strip()
+                        self._player_name = name
+                        self._name_input_active = False
+                        self._stdin_text_mode = False
+                        self._leaderboard_save_result(player=name)
+                        saved = name if name else "(이름 없음)"
+                        print(f"[NAME] 저장됨: {saved}", flush=True)
+                    elif event.key == pygame.K_ESCAPE:
+                        # ESC → 이전 이름(_player_name)으로 저장
+                        self._name_input_active = False
+                        self._stdin_text_mode = False
+                        self._leaderboard_save_result(player=self._player_name)
+                        saved = self._player_name if self._player_name else "(이름 없음)"
+                        print(f"[NAME] 이전 이름으로 저장됨: {saved}", flush=True)
+                    elif event.key == pygame.K_BACKSPACE:
+                        if self._name_input_text:
+                            self._name_input_text = self._name_input_text[:-1]
+                    else:
+                        ch = event.unicode
+                        if ch and len(self._name_input_text) < 16:
+                            self._name_input_text += ch
+                    continue  # 이름 입력 중엔 다른 키 처리 건너뜀
 
                 # ESC → 뒤로가기
                 if event.key == pygame.K_ESCAPE:
@@ -937,12 +1021,36 @@ class GameEngine:
         elif btn_name == "btn_gameplay_menu":
             self.transition_to(GameState.MENU)
 
-        # ── 결과 화면 버튼 ──
+        # ── 결과 화면 버튼 (이름 입력 오버레이) ──
+        elif btn_name in ("btn_name_save", "btn_name_skip"):
+            if self._name_btn_pending == btn_name:
+                # 두 번째 탭 → 실행
+                self._name_btn_pending = ""
+                if btn_name == "btn_name_save":
+                    name = self._name_input_text.strip()
+                    self._player_name = name
+                    self._name_input_active = False
+                    self._stdin_text_mode = False
+                    self._leaderboard_save_result(player=name)
+                    saved = name if name else "(이름 없음)"
+                    print(f"[NAME] 저장됨: {saved}", flush=True)
+                else:  # btn_name_skip
+                    self._name_input_active = False
+                    self._stdin_text_mode = False
+                    self._leaderboard_save_result(player=self._player_name)
+                    saved = self._player_name if self._player_name else "(이름 없음)"
+                    print(f"[NAME] 이전 이름으로 저장됨: {saved}", flush=True)
+            else:
+                # 첫 번째 탭 → 하이라이트만
+                self._name_btn_pending = btn_name
         elif btn_name == "btn_retry":
+            self._name_btn_pending = ""
             self.transition_to(GameState.READY)
         elif btn_name == "btn_result_songs":
+            self._name_btn_pending = ""
             self.transition_to(GameState.SONG_SELECT)
         elif btn_name == "btn_result_menu":
+            self._name_btn_pending = ""
             self.transition_to(GameState.MENU)
 
         # ── 리더보드 화면 버튼 ──
@@ -2534,6 +2642,105 @@ class GameEngine:
         )
         self._display.blit(hint, hint.get_rect(center=(w // 2, h - MARGIN_BOTTOM + 10)))
 
+        # ── 이름 입력 오버레이 ────────────────────────────────────────────
+        if self._name_input_active:
+            self._render_name_input_overlay(w, h)
+
+    def _render_name_input_overlay(self, w, h):
+        """결과 화면 위에 표시되는 이름 입력 반투명 오버레이."""
+        # 반투명 배경
+        overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 170))
+        self._display.blit(overlay, (0, 0))
+
+        BOX_W, BOX_H = min(480, w - 60), 220
+        bx = w // 2 - BOX_W // 2
+        by = h // 2 - BOX_H // 2
+
+        # 박스 배경 + 테두리
+        pygame.draw.rect(self._display, (15, 10, 35), (bx, by, BOX_W, BOX_H), border_radius=18)
+        pygame.draw.rect(self._display, self._neon_color((160, 80, 255), self._neon_tick),
+                         (bx, by, BOX_W, BOX_H), 2, border_radius=18)
+
+        # 타이틀
+        title_s = self._fonts["small_retro"].render("ENTER YOUR NAME", True, (220, 180, 255))
+        self._display.blit(title_s, title_s.get_rect(center=(w // 2, by + 28)))
+
+        sub_s = self._fonts["small_retro"].render(
+            "ESC / SKIP = save previous name", True, (100, 90, 120))
+        self._display.blit(sub_s, sub_s.get_rect(center=(w // 2, by + 50)))
+
+        # 입력 박스 — small_retro(14pt) 사용, 박스 높이를 폰트에 맞게 설정
+        font = self._fonts["small_retro"]
+        INPUT_W = BOX_W - 40
+        INPUT_H = font.get_height() + 14   # 상하 패딩 7px
+        ix = w // 2 - INPUT_W // 2
+        iy = by + 70
+        pygame.draw.rect(self._display, (30, 20, 55), (ix, iy, INPUT_W, INPUT_H), border_radius=8)
+        pygame.draw.rect(self._display, (180, 130, 255), (ix, iy, INPUT_W, INPUT_H), 2, border_radius=8)
+
+        # 커서 깜빡임
+        display_text = self._name_input_text
+        if int(self._neon_tick * 2) % 2 == 0:
+            display_text += "|"
+
+        # 텍스트 너비가 박스를 넘으면 오른쪽 끝을 보여주도록 클리핑
+        text_s = font.render(display_text, True, (255, 255, 255))
+        TEXT_MARGIN = 8
+        clip_rect = pygame.Rect(ix + TEXT_MARGIN, iy, INPUT_W - TEXT_MARGIN * 2, INPUT_H)
+        tx = ix + TEXT_MARGIN
+        # 텍스트가 박스보다 넓으면 오른쪽 정렬
+        if text_s.get_width() > INPUT_W - TEXT_MARGIN * 2:
+            tx = ix + INPUT_W - TEXT_MARGIN - text_s.get_width()
+        ty = iy + (INPUT_H - text_s.get_height()) // 2
+        self._display.set_clip(clip_rect)
+        self._display.blit(text_s, (tx, ty))
+        self._display.set_clip(None)
+
+        # SAVE / SKIP 버튼 (더블탭: 첫 탭=하이라이트, 두 번째 탭=실행)
+        mouse_pos = pygame.mouse.get_pos()
+        BTN_W2, BTN_H2 = 130, 38
+        gap = 20
+        total_bw = BTN_W2 * 2 + gap
+        btn_y = iy + INPUT_H + 18
+        save_rect = pygame.Rect(w // 2 - total_bw // 2,              btn_y, BTN_W2, BTN_H2)
+        skip_rect = pygame.Rect(w // 2 - total_bw // 2 + BTN_W2 + gap, btn_y, BTN_W2, BTN_H2)
+        self._btn_rects["btn_name_save"] = save_rect
+        self._btn_rects["btn_name_skip"] = skip_rect
+
+        pending = getattr(self, '_name_btn_pending', '')
+        for rect, btn_id, label, base_col in [
+            (save_rect, "btn_name_save", "SAVE",  (0, 160, 100)),
+            (skip_rect, "btn_name_skip", "SKIP",  (80, 80, 110)),
+        ]:
+            is_pending = (pending == btn_id)
+            is_hover   = rect.collidepoint(mouse_pos)
+            if is_pending:
+                # 첫 탭 후: 밝게 + 네온 테두리 + "한 번 더" 안내
+                col = tuple(min(c + 80, 255) for c in base_col)
+                border_col = (255, 255, 80)
+                border_w = 3
+            elif is_hover:
+                col = tuple(min(c + 40, 255) for c in base_col)
+                border_col = (200, 200, 220)
+                border_w = 2
+            else:
+                col = base_col
+                border_col = (200, 200, 220)
+                border_w = 2
+            pygame.draw.rect(self._display, col, rect, border_radius=10)
+            pygame.draw.rect(self._display, border_col, rect, border_w, border_radius=10)
+            lbl_txt = f"[{label}]" if is_pending else label
+            lbl = self._fonts["btn_retro"].render(lbl_txt, True, (255, 255, 255))
+            self._display.blit(lbl, lbl.get_rect(center=rect.center))
+
+        # 더블탭 안내 텍스트
+        if pending:
+            hint_s = self._fonts["small_retro"].render(
+                "press again to confirm", True, (255, 220, 80))
+            self._display.blit(hint_s, hint_s.get_rect(
+                center=(w // 2, btn_y + BTN_H2 + 14)))
+
     @staticmethod
     def _fmt_lb_date(date_str: str) -> str:
         """리더보드 날짜 포매팅: 'YYYY-MM-DD HH:MM' → 'MM/DD HH:MM' (11자)."""
@@ -2608,9 +2815,9 @@ class GameEngine:
         entries = sorted(entries, key=lambda e: e.get("score", 0), reverse=True)
 
         # 테이블 헤더
-        COL_W = max(50, (w - 40) // 5)
-        headers = ["RANK", "SONG", "SCORE", "GRADE", "DATE/TIME"]
-        header_xs = [20 + i * COL_W for i in range(5)]
+        COL_W = max(50, (w - 40) // 6)
+        headers = ["RANK", "SONG", "PLAYER", "SCORE", "GRADE", "DATE"]
+        header_xs = [20 + i * COL_W for i in range(6)]
         header_col = (180, 180, 255)
         for hi, (hdr, hx) in enumerate(zip(headers, header_xs)):
             hs = self._fonts["small_retro"].render(hdr, True, header_col)
@@ -2629,9 +2836,11 @@ class GameEngine:
             for ri, entry in enumerate(entries[:max_rows]):
                 ry = TABLE_TOP + 24 + ri * ROW_H
                 row_col = (255, 220, 50) if ri == 0 else (200, 200, 220)
+                player = entry.get("player", "") or "-"
                 vals = [
                     f"#{ri+1}",
-                    entry.get("title", entry.get("song_id", "?"))[:12],
+                    entry.get("title", entry.get("song_id", "?"))[:10],
+                    player[:10],
                     str(entry.get("score", 0)),
                     entry.get("grade", "-"),
                     self._fmt_lb_date(entry.get("date", "")),
@@ -2904,9 +3113,16 @@ class GameEngine:
             pygame.mixer.music.pause()
         elif state == GameState.RESULT:
             self._result_data = self._scorer.get_final_result()
-            # 리더보드에 결과 저장 (프리스타일은 저장 안 함)
+            # 프리스타일은 저장 안 함 / 그 외는 이름 입력 오버레이 표시
             if self._current_mode != "freestyle":
-                self._leaderboard_save_result()
+                self._name_input_active = True
+                self._stdin_text_mode = True
+                self._name_input_text = self._player_name  # 이전 이름 미리 채움
+                print(f"\n[NAME] Enter your name + Enter to save  |  Empty + Enter = save without name  |  ESC = save with previous name ({self._player_name or 'none'}): ",
+                      end="", flush=True)
+            else:
+                self._name_input_active = False
+                self._stdin_text_mode = False
         elif state == GameState.LEADERBOARD:
             self._leaderboard_load()
             self._generic_focus_idx = 0
@@ -2986,7 +3202,7 @@ class GameEngine:
         except (FileNotFoundError, json.JSONDecodeError):
             self._leaderboard = []
 
-    def _leaderboard_save_result(self):
+    def _leaderboard_save_result(self, player: str = ""):
         """현재 게임 결과를 리더보드 파일에 추가로 저장한다."""
         from datetime import datetime
         if not self._result_data:
@@ -2995,6 +3211,7 @@ class GameEngine:
         entry = {
             "song_id": song.get("id", "unknown"),
             "title":   song.get("title", song.get("id", "Unknown")),
+            "player":  player,
             "score":   self._result_data.get("total_score", 0),
             "grade":   self._result_data.get("final_grade", "-"),
             "mode":    self._current_mode,
