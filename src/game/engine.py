@@ -90,6 +90,7 @@ class GameEngine:
         self._player_name: str = ""            # 마지막 저장 이름 (다음 게임에 미리 채움)
         self._stdin_text_mode: bool = False    # True이면 stdin 브리지가 문자 그대로 전달
         self._name_btn_pending: str = ""       # 더블탭 대기 중인 버튼 이름 ("btn_name_save" | "btn_name_skip" | "")
+        self._name_focus_idx: int = 0             # 이름 입력 오버레이 포커스 (0=텍스트, 1=SAVE, 2=SKIP)
         # 챌린지 모드 연속 MISS 카운터
         self._consecutive_miss: int = 0
         self._challenge_game_over: bool = False
@@ -561,9 +562,27 @@ class GameEngine:
                                 sys.stdout.write('\n')
                                 sys.stdout.flush()
                                 _post(pygame.K_RETURN)
-                            elif ch == b'\x1b':            # ESC
-                                select.select([sys.stdin], [], [], 0.08)
-                                _post(pygame.K_ESCAPE)
+                            elif ch == b'\x1b':            # ESC 또는 방향키
+                                r2, _, _ = select.select([sys.stdin], [], [], 0.08)
+                                if r2:
+                                    ch2 = _os.read(fd, 1)
+                                    if ch2 == b'[':
+                                        r3, _, _ = select.select([sys.stdin], [], [], 0.05)
+                                        if r3:
+                                            ch3 = _os.read(fd, 1)
+                                            arrow_name = ARROW.get(ch3)
+                                            if arrow_name:
+                                                _post(getattr(pygame, arrow_name))
+                                            else:
+                                                _post(pygame.K_ESCAPE)
+                                        else:
+                                            _post(pygame.K_ESCAPE)
+                                    else:
+                                        _post(pygame.K_ESCAPE)
+                                else:
+                                    _post(pygame.K_ESCAPE)
+                            elif ch == b' ':               # Space
+                                _post(pygame.K_SPACE)
                             elif 0x20 <= ch[0] <= 0x7E:   # ASCII 출력 가능 문자
                                 sys.stdout.write(ch.decode('ascii'))
                                 sys.stdout.flush()
@@ -832,15 +851,29 @@ class GameEngine:
 
                 # ── 이름 입력 오버레이 활성 중: 모든 키를 여기서 처리 ──
                 if self._name_input_active:
-                    if event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
-                        # ENTER → 현재 텍스트로 저장
-                        name = self._name_input_text.strip()
-                        self._player_name = name
-                        self._name_input_active = False
-                        self._stdin_text_mode = False
-                        self._leaderboard_save_result(player=name)
-                        saved = name if name else "(이름 없음)"
-                        print(f"[NAME] 저장됨: {saved}", flush=True)
+                    if event.key in (pygame.K_LEFT, pygame.K_RIGHT,
+                                     pygame.K_UP, pygame.K_DOWN):
+                        # 방향키 → 포커스 순환 (0=텍스트, 1=SAVE, 2=SKIP)
+                        if event.key in (pygame.K_DOWN, pygame.K_RIGHT):
+                            self._name_focus_idx = (self._name_focus_idx + 1) % 3
+                        else:
+                            self._name_focus_idx = (self._name_focus_idx - 1) % 3
+                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER,
+                                       pygame.K_SPACE):
+                        if self._name_focus_idx <= 1:  # 텍스트(0) 또는 SAVE(1)
+                            name = self._name_input_text.strip()
+                            self._player_name = name
+                            self._name_input_active = False
+                            self._stdin_text_mode = False
+                            self._leaderboard_save_result(player=name)
+                            saved = name if name else "(이름 없음)"
+                            print(f"[NAME] 저장됨: {saved}", flush=True)
+                        else:  # SKIP(2)
+                            self._name_input_active = False
+                            self._stdin_text_mode = False
+                            self._leaderboard_save_result(player=self._player_name)
+                            saved = self._player_name if self._player_name else "(이름 없음)"
+                            print(f"[NAME] 이전 이름으로 저장됨: {saved}", flush=True)
                     elif event.key == pygame.K_ESCAPE:
                         # ESC → 이전 이름(_player_name)으로 저장
                         self._name_input_active = False
@@ -848,13 +881,15 @@ class GameEngine:
                         self._leaderboard_save_result(player=self._player_name)
                         saved = self._player_name if self._player_name else "(이름 없음)"
                         print(f"[NAME] 이전 이름으로 저장됨: {saved}", flush=True)
-                    elif event.key == pygame.K_BACKSPACE:
-                        if self._name_input_text:
-                            self._name_input_text = self._name_input_text[:-1]
-                    else:
-                        ch = event.unicode
-                        if ch and len(self._name_input_text) < 16:
-                            self._name_input_text += ch
+                    elif self._name_focus_idx == 0:
+                        # 텍스트 포커스일 때만 문자 입력 허용
+                        if event.key == pygame.K_BACKSPACE:
+                            if self._name_input_text:
+                                self._name_input_text = self._name_input_text[:-1]
+                        else:
+                            ch = event.unicode
+                            if ch and ch.isprintable() and len(self._name_input_text) < 16:
+                                self._name_input_text += ch
                     continue  # 이름 입력 중엔 다른 키 처리 건너뜀
 
                 # ESC → 뒤로가기
@@ -2267,6 +2302,16 @@ class GameEngine:
             pygame.draw.line(surface, color, origin, h_end, width)
             pygame.draw.line(surface, color, origin, v_end, width)
 
+    def _get_skeleton_color_bgr(self):
+        """현재 피드백 등급에 따라 스켈레톤 BGR 색상을 반환합니다."""
+        if self._last_feedback and self._feedback_timer > 0:
+            r, g, b = self._last_feedback.get("color", (0, 180, 255))
+            line_bgr = (b, g, r)
+            fill_bgr = (min(int(b * 1.3), 255), min(int(g * 1.3), 255), min(int(r * 1.3), 255))
+            ring_bgr = (int(b * 0.7), int(g * 0.7), int(r * 0.7))
+            return line_bgr, fill_bgr, ring_bgr
+        return (0, 255, 180), (0, 255, 255), (0, 200, 150)
+
     def _draw_stick_figure(self, surface, landmarks_33x4, panel_rect,
                            line_color=(0, 200, 255), joint_color=(255, 255, 255),
                            line_width=3, joint_radius=6, visibility_threshold=0.3):
@@ -2394,6 +2439,7 @@ class GameEngine:
                 # 스켈레톤을 카메라 프레임 위에 직접 그리기
                 if hasattr(self, '_pose_detected') and self._pose_detected and \
                         self._current_landmarks is not None:
+                    line_bgr, fill_bgr, ring_bgr = self._get_skeleton_color_bgr()
                     lm = self._current_landmarks
                     for src_j, dst_j in SKELETON_CONNECTIONS:
                         if src_j < len(lm) and dst_j < len(lm) and \
@@ -2402,13 +2448,13 @@ class GameEngine:
                             y1 = int(lm[src_j][1] * cam_h_target)
                             x2 = int(lm[dst_j][0] * cam_w_target)
                             y2 = int(lm[dst_j][1] * cam_h_target)
-                            cv2.line(frame_bgr, (x1, y1), (x2, y2), (0, 255, 180), 3)
+                            cv2.line(frame_bgr, (x1, y1), (x2, y2), line_bgr, 3)
                     for idx in DANCE_JOINTS:
                         if idx < len(lm) and lm[idx][3] > 0.3:
                             cx_ = int(lm[idx][0] * cam_w_target)
                             cy_ = int(lm[idx][1] * cam_h_target)
-                            cv2.circle(frame_bgr, (cx_, cy_), 5, (0, 255, 255), -1)
-                            cv2.circle(frame_bgr, (cx_, cy_), 8, (0, 200, 150), 2)
+                            cv2.circle(frame_bgr, (cx_, cy_), 5, fill_bgr, -1)
+                            cv2.circle(frame_bgr, (cx_, cy_), 8, ring_bgr, 2)
 
                 frame_rgb = frame_bgr[:, :, ::-1]
                 self._cam_surf = pygame.image.frombuffer(
@@ -2452,6 +2498,7 @@ class GameEngine:
 
         # ── 파티클 업데이트 & 렌더링 ────────────────────────────────
         self._update_and_draw_particles()
+
 
         # ── 피드백 이펙트 오버레이 (프리스타일에서는 숨김) ──────────────────
         if self._last_feedback and self._feedback_timer > 0 and not is_freestyle:
@@ -2902,12 +2949,16 @@ class GameEngine:
         INPUT_H = font.get_height() + 14   # 상하 패딩 7px
         ix = w // 2 - INPUT_W // 2
         iy = by + 70
-        pygame.draw.rect(self._display, (30, 20, 55), (ix, iy, INPUT_W, INPUT_H), border_radius=8)
-        pygame.draw.rect(self._display, (180, 130, 255), (ix, iy, INPUT_W, INPUT_H), 2, border_radius=8)
+        text_focused = (getattr(self, '_name_focus_idx', 0) == 0)
+        input_bg = (40, 28, 70) if text_focused else (30, 20, 55)
+        input_border = (0, 255, 200) if text_focused else (180, 130, 255)
+        input_border_w = 3 if text_focused else 2
+        pygame.draw.rect(self._display, input_bg, (ix, iy, INPUT_W, INPUT_H), border_radius=8)
+        pygame.draw.rect(self._display, input_border, (ix, iy, INPUT_W, INPUT_H), input_border_w, border_radius=8)
 
-        # 커서 깜빡임
+        # 커서 깜빡임 (텍스트 포커스일 때만 표시)
         display_text = self._name_input_text
-        if int(self._neon_tick * 2) % 2 == 0:
+        if text_focused and int(self._neon_tick * 2) % 2 == 0:
             display_text += "|"
 
         # 텍스트 너비가 박스를 넘으면 오른쪽 끝을 보여주도록 클리핑
@@ -2935,16 +2986,23 @@ class GameEngine:
         self._btn_rects["btn_name_skip"] = skip_rect
 
         pending = getattr(self, '_name_btn_pending', '')
-        for rect, btn_id, label, base_col in [
+        focus_idx = getattr(self, '_name_focus_idx', 0)
+        for i, (rect, btn_id, label, base_col) in enumerate([
             (save_rect, "btn_name_save", "SAVE",  (0, 160, 100)),
             (skip_rect, "btn_name_skip", "SKIP",  (80, 80, 110)),
-        ]:
+        ]):
+            btn_focus_i = i + 1  # 0=텍스트, 1=SAVE, 2=SKIP
             is_pending = (pending == btn_id)
             is_hover   = rect.collidepoint(mouse_pos)
+            is_focused = (focus_idx == btn_focus_i)
             if is_pending:
                 # 첫 탭 후: 밝게 + 네온 테두리 + "한 번 더" 안내
                 col = tuple(min(c + 80, 255) for c in base_col)
                 border_col = (255, 255, 80)
+                border_w = 3
+            elif is_focused:
+                col = tuple(min(c + 50, 255) for c in base_col)
+                border_col = (0, 255, 200)
                 border_w = 3
             elif is_hover:
                 col = tuple(min(c + 40, 255) for c in base_col)
@@ -2957,14 +3015,22 @@ class GameEngine:
             pygame.draw.rect(self._display, col, rect, border_radius=10)
             pygame.draw.rect(self._display, border_col, rect, border_w, border_radius=10)
             lbl_txt = f"[{label}]" if is_pending else label
+            # 포커스 표시: 선택 표시자
+            if is_focused and not is_pending:
+                lbl_txt = f"> {label}"
             lbl = self._fonts["btn_retro"].render(lbl_txt, True, (255, 255, 255))
             self._display.blit(lbl, lbl.get_rect(center=rect.center))
 
-        # 더블탭 안내 텍스트
+        # 안내 힌트
         if pending:
             hint_s = self._fonts["small_retro"].render(
                 "press again to confirm", True, (255, 220, 80))
             self._display.blit(hint_s, hint_s.get_rect(
+                center=(w // 2, btn_y + BTN_H2 + 14)))
+        else:
+            nav_hint = self._fonts["small_retro"].render(
+                "arrows: MOVE  SPACE/ENTER: SELECT", True, (100, 90, 130))
+            self._display.blit(nav_hint, nav_hint.get_rect(
                 center=(w // 2, btn_y + BTN_H2 + 14)))
 
     @staticmethod
