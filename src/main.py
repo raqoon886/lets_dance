@@ -49,8 +49,8 @@ def main():
                         choices=["cosine", "euclidean", "hybrid", "angle"],
                         default="angle",
                         help="direct 모드 유사도 메트릭: cosine / euclidean / hybrid / angle (기본: angle)")
-    parser.add_argument("--delay", "-d", type=float, default=0.4,
-                        help="반응 딜레이 허용 시간(초). 유저가 보고 따라하는 시간 보정 (기본: 0.4)")
+    parser.add_argument("--delay", "-d", type=float, default=1.5,
+                        help="반응 딜레이 허용 시간(초). 유저가 보고 따라하는 시간 보정 (기본: 1.5초)")
     parser.add_argument("--scratch-model-name", type=str, default=None,
                         help="scratch 모드에서 사용할 registry 모델명. 예: gcn_e64")
     parser.add_argument("--scratch-model-dir", type=str, default=None,
