@@ -12,9 +12,13 @@ from datetime import datetime
 
 import pygame
 import cv2
+import numpy as np
+import math
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from pose.landmark_utils import SKELETON_CONNECTIONS, DANCE_JOINTS
 
 
 class GameState:
@@ -148,6 +152,8 @@ class GameEngine:
         self._score_trace_path: str = ""
         self._last_similarity_debug = None
         self._last_terminal_similarity = None
+        # ── 렌더링 성능 캐시 ──
+        self._ref_video_frame_seq = -1        # 레퍼런스 영상 변경 감지용 시퀀스
 
         # ── 멀티플레이 ───────────────────────────────────────────────
         self._is_multi_mode: bool = False       # 현재 멀티 게임 중 여부
@@ -210,6 +216,7 @@ class GameEngine:
         flags = pygame.FULLSCREEN if ui_cfg.get("fullscreen", False) else 0
         self._display = pygame.display.set_mode((w, h), flags)
         pygame.display.set_caption("Let's Dance!")
+        pygame.mouse.set_visible(False)
         self._clock = pygame.time.Clock()
 
         # Camera & Pose Detector (Async Thread)
@@ -1499,7 +1506,6 @@ class GameEngine:
 
     def _update_gameplay(self):
         """Fetch async frame and compute score."""
-        import numpy as np
 
         if getattr(self, '_async_camera', None) is None:
             return
@@ -1536,12 +1542,15 @@ class GameEngine:
             self._ref_frame_landmarks = self._ref_landmarks[fi]
             self._ref_current_idx = fi
 
-        # 레퍼런스 영상 프레임 역재생 비동기 동기화 (Background 스레드에서 무거운 디코딩/리사이즈 전담)
+        # 레퍼런스 영상 프레임 — 변경 시에만 Surface 재생성 (tobytes 호출 최소화)
         if getattr(self, '_async_video_player', None) is not None and self._current_session:
-            vframe_rgb = self._async_video_player.get_latest_frame()
+            vframe_rgb, vframe_seq = self._async_video_player.get_latest_frame_with_seq()
             if vframe_rgb is not None:
-                th, tw = vframe_rgb.shape[:2]
-                self._ref_video_surf = pygame.image.frombuffer(vframe_rgb.tobytes(), (tw, th), "RGB")
+                if vframe_seq != self._ref_video_frame_seq:
+                    self._ref_video_frame_seq = vframe_seq
+                    th, tw = vframe_rgb.shape[:2]
+                    self._ref_video_surf = pygame.image.frombuffer(
+                        vframe_rgb.tobytes(), (tw, th), "RGB")
             else:
                 self._ref_video_surf = None
 
@@ -2504,9 +2513,6 @@ class GameEngine:
         HEADER: 점수/콤보/시간/버튼
         FOOTER: 곡 정보/조작 안내
         """
-        import numpy as np
-        import math
-
         HEADER_H = 55
         FOOTER_H = 44          # 여유 있는 하단 영역
         BORDER   = 4          # 패널 테두리 두께
@@ -2552,15 +2558,14 @@ class GameEngine:
             # 스켈레톤을 카메라 프레임 위에 직접 그리기
             if hasattr(self, '_pose_detected') and self._pose_detected and \
                     self._current_landmarks is not None:
-                from pose.landmark_utils import SKELETON_CONNECTIONS, DANCE_JOINTS
                 lm = self._current_landmarks
-                for src, dst in SKELETON_CONNECTIONS:
-                    if src < len(lm) and dst < len(lm) and \
-                       lm[src][3] > 0.3 and lm[dst][3] > 0.3:
-                        x1 = int(lm[src][0] * cam_w_target)
-                        y1 = int(lm[src][1] * cam_h_target)
-                        x2 = int(lm[dst][0] * cam_w_target)
-                        y2 = int(lm[dst][1] * cam_h_target)
+                for src_j, dst_j in SKELETON_CONNECTIONS:
+                    if src_j < len(lm) and dst_j < len(lm) and \
+                       lm[src_j][3] > 0.3 and lm[dst_j][3] > 0.3:
+                        x1 = int(lm[src_j][0] * cam_w_target)
+                        y1 = int(lm[src_j][1] * cam_h_target)
+                        x2 = int(lm[dst_j][0] * cam_w_target)
+                        y2 = int(lm[dst_j][1] * cam_h_target)
                         cv2.line(frame_bgr, (x1, y1), (x2, y2), (0, 255, 180), 3)
                 for idx in DANCE_JOINTS:
                     if idx < len(lm) and lm[idx][3] > 0.3:
@@ -2570,7 +2575,7 @@ class GameEngine:
                         cv2.circle(frame_bgr, (cx_, cy_), 8, (0, 200, 150), 2)
 
             frame_rgb = frame_bgr[:, :, ::-1]
-            cam_surf  = pygame.image.frombuffer(
+            cam_surf = pygame.image.frombuffer(
                 frame_rgb.tobytes(), (cam_w_target, cam_h_target), "RGB")
             self._display.blit(cam_surf, (cam_x_offset, cam_y_offset))
         else:
