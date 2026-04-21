@@ -196,6 +196,7 @@ class GameEngine:
         flags = pygame.FULLSCREEN if ui_cfg.get("fullscreen", False) else 0
         self._display = pygame.display.set_mode((w, h), flags)
         pygame.display.set_caption("Let's Dance!")
+        pygame.mouse.set_visible(False)
         self._clock = pygame.time.Clock()
 
         # Camera & Pose Detector (Async Thread)
