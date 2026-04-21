@@ -1,5 +1,11 @@
 # Let's Dance - Configuration Settings
 
+# ── 디버그 옵션 ─────────────────────────────────────────────────────
+# fake_multi: true 로 설정하면 보드 1개로 멀티플레이 UI 테스트 가능
+# 테스트 후 false 로 되돌리거나 이 블록을 삭제하세요
+debug:
+  fake_multi: false
+
 camera:
   device_id: 0
   width: 640
