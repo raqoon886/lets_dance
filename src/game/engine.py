@@ -2177,6 +2177,179 @@ class GameEngine:
         hint = self._fonts["small_retro"].render("ESC: CANCEL", True, hint_col)
         self._display.blit(hint, hint.get_rect(center=(w // 2, h - 24)))
 
+    def _render_waiting(self, w, h):
+        """MULTI PLAY 상대방 탐색 중 화면."""
+        import math
+        tick = self._neon_tick
+
+        # 배경
+        self._display.fill((6, 4, 18))
+        for y in range(h):
+            t = y / h
+            pygame.draw.line(self._display, (int(18+10*t), int(4+4*t), int(40+15*t)), (0, y), (w, y))
+
+        # 타이틀
+        title_col = self._neon_color((255, 80, 160), tick)
+        title_surf = self._fonts["result_big"].render("MULTIPLAY", True, title_col)
+        self._display.blit(title_surf, title_surf.get_rect(center=(w // 2, 44)))
+
+        pygame.draw.line(self._display, self._neon_color((180, 40, 100), tick, 0.6),
+                         (w // 4, 64), (w * 3 // 4, 64), 1)
+
+        # ── 단계 1: 탐색 중 (아직 연결 안 됨) ─────────────────────
+        if not self._multi_connected:
+            cx, cy = w // 2, h // 2 - 20
+            r_spin = 36
+            num_dots = 10
+            for i in range(num_dots):
+                angle = math.radians(i * (360 / num_dots) + tick * 180)
+                dx2 = int(cx + r_spin * math.cos(angle))
+                dy2 = int(cy + r_spin * math.sin(angle))
+                alpha = int(60 + 195 * (i / num_dots))
+                col_d = (int(255 * alpha / 255), int(80 * alpha / 255), int(180 * alpha / 255))
+                pygame.draw.circle(self._display, col_d, (dx2, dy2), 5)
+
+            msg = self._multi_status_msg or "상대방 탐색 중..."
+            msg_col = (255, 80, 80) if self._multi_timed_out else (220, 220, 255)
+            msg_surf = self._fonts["body"].render(msg, True, msg_col)
+            self._display.blit(msg_surf, msg_surf.get_rect(center=(w // 2, cy + 50)))
+
+            cancel_rect = pygame.Rect(w // 2 - 100, h // 2 + 100, 200, 44)
+            self._btn_rects["btn_waiting_cancel"] = cancel_rect
+            hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
+            pygame.draw.rect(self._display, (80, 20, 20) if hover else (30, 10, 10),
+                             cancel_rect, border_radius=10)
+            self._draw_neon_rect(self._display, cancel_rect,
+                                 self._neon_color((255, 80, 80), tick) if hover else (120, 40, 40),
+                                 width=2, radius=10, glow_radius=6)
+            cancel_lbl = self._fonts["small_retro"].render("CANCEL", True, (255, 255, 255))
+            self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
+            hint_surf = self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100))
+            self._display.blit(hint_surf, hint_surf.get_rect(center=(w // 2, h - 24)))
+            return
+
+        # ── 단계 2: HOST 연결됨 — 모드 선택 ──────────────────────
+        if self._multi_role == "host" and not self._multi_mode_selected:
+            sm_col  = self._neon_color((200, 140, 255), tick)
+            sm_glow = self._fonts["result_big"].render("-- SELECT MODE --", True, (60, 20, 80))
+            sm_surf = self._fonts["result_big"].render("-- SELECT MODE --", True, sm_col)
+            SM_Y = 84
+            for dx, dy in [(-2,0),(2,0),(0,-2),(0,2)]:
+                self._display.blit(sm_glow, sm_glow.get_rect(center=(w//2+dx, SM_Y+dy)))
+            self._display.blit(sm_surf, sm_surf.get_rect(center=(w // 2, SM_Y)))
+            pygame.draw.line(self._display, self._neon_color((120, 40, 160), tick, 0.5),
+                             (w // 4, SM_Y + 14), (w * 3 // 4, SM_Y + 14), 1)
+
+            mode_btns = [
+                ("btn_multi_mode_practice",  "PRACTICE",  "1", (0, 220, 180),  (0, 55, 44)),
+                ("btn_multi_mode_challenge", "CHALLENGE", "2", (255, 190, 0),  (65, 48, 0)),
+                ("btn_multi_mode_freestyle", "FREESTYLE", "3", (200, 80, 255), (55, 14, 75)),
+            ]
+            BTN_W  = min(400, w - 40)
+            BTN_H  = 60
+            GAP    = 16
+            START_Y = SM_Y + 28
+
+            focus_list = ["btn_multi_mode_practice", "btn_multi_mode_challenge",
+                          "btn_multi_mode_freestyle", "btn_waiting_cancel"]
+            focus_idx  = self._generic_focus_idx % len(focus_list)
+
+            max_row_w = 0
+            for _, label, icon, _, _ in mode_btns:
+                _ic = self._fonts["result_big"].render(f"[{icon}]", True, (255,255,255))
+                _lb = self._fonts["result_big"].render(label, True, (255,255,255))
+                max_row_w = max(max_row_w, _ic.get_width() + 16 + _lb.get_width())
+            base_lx = w // 2 - max_row_w // 2
+
+            mouse_pos = pygame.mouse.get_pos()
+            for i, (btn_id, label, icon, col, bg_base) in enumerate(mode_btns):
+                bx = w // 2 - BTN_W // 2
+                by = START_Y + i * (BTN_H + GAP)
+                rect = pygame.Rect(bx, by, BTN_W, BTN_H)
+                self._btn_rects[btn_id] = rect
+                hover   = rect.collidepoint(mouse_pos)
+                focused = (focus_list[focus_idx] == btn_id)
+                active  = hover or focused
+
+                bg = tuple(min(255, int(c * 2.8)) for c in bg_base) if active else bg_base
+                pygame.draw.rect(self._display, bg, rect, border_radius=14)
+
+                accent_rect = pygame.Rect(bx + 4, by + 6, 6, BTN_H - 12)
+                pygame.draw.rect(self._display,
+                                 self._neon_color(col, tick) if active else tuple(c // 2 for c in col),
+                                 accent_rect, border_radius=3)
+
+                if active:
+                    self._draw_neon_rect(self._display, rect,
+                                        self._neon_color(col, tick), width=3, radius=14, glow_radius=10)
+                    self._draw_corner_brackets(self._display, rect,
+                                              self._neon_color(col, tick * 2), size=14, width=3)
+                else:
+                    pygame.draw.rect(self._display, tuple(c // 2 for c in col),
+                                     rect, 2, border_radius=14)
+
+                icon_surf = self._fonts["result_big"].render(
+                    f"[{icon}]", True,
+                    self._neon_color(col, tick) if active else tuple(min(255, c // 2 + 60) for c in col))
+                lbl_surf  = self._fonts["result_big"].render(
+                    label, True, (255, 255, 255) if active else (190, 185, 210))
+
+                cy_btn = by + BTN_H // 2
+                self._display.blit(icon_surf, icon_surf.get_rect(midleft=(base_lx, cy_btn)))
+                self._display.blit(lbl_surf,  lbl_surf.get_rect(midleft=(base_lx + icon_surf.get_width() + 16, cy_btn)))
+
+            cancel_rect = pygame.Rect(w // 2 - 80, h - 52, 160, 34)
+            self._btn_rects["btn_waiting_cancel"] = cancel_rect
+            focused_c = (focus_list[focus_idx] == "btn_waiting_cancel")
+            hover_c   = cancel_rect.collidepoint(pygame.mouse.get_pos())
+            active_c  = hover_c or focused_c
+            pygame.draw.rect(self._display, (80, 20, 20) if active_c else (30, 10, 10),
+                             cancel_rect, border_radius=10)
+            pygame.draw.rect(self._display,
+                             self._neon_color((255, 80, 80), tick) if active_c else (120, 40, 40),
+                             cancel_rect, 2 if not focused_c else 3, border_radius=10)
+            cancel_lbl = self._fonts["small_retro"].render("< CANCEL", True,
+                                                            (255, 200, 200) if active_c else (180, 120, 120))
+            self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
+            return
+
+        # ── 단계 3: CLIENT — HOST가 모드/곡 선택 중 ─────────────
+        role_col = self._neon_color((80, 200, 255), tick)
+        role_surf = self._fonts["result_big"].render("CLIENT", True, role_col)
+        self._display.blit(role_surf, role_surf.get_rect(center=(w // 2, 90)))
+
+        wait_col = self._neon_color((180, 160, 255), tick)
+        wait_surf = self._fonts["body"].render("HOST가 모드/곡을 선택 중입니다...", True, wait_col)
+        self._display.blit(wait_surf, wait_surf.get_rect(center=(w // 2, 125)))
+
+        cx, cy = w // 2, h // 2 - 10
+        r_spin = 36
+        num_dots = 10
+        for i in range(num_dots):
+            angle = math.radians(i * (360 / num_dots) + tick * 180)
+            dx = int(cx + r_spin * math.cos(angle))
+            dy = int(cy + r_spin * math.sin(angle))
+            alpha = int(60 + 195 * (i / num_dots))
+            col = (int(255 * alpha / 255), int(80 * alpha / 255), int(180 * alpha / 255))
+            pygame.draw.circle(self._display, col, (dx, dy), 5)
+
+        ip_surf = self._fonts["small_retro"].render(
+            f"연결됨: {self._multi_opponent_ip}", True, (100, 180, 120))
+        self._display.blit(ip_surf, ip_surf.get_rect(center=(w // 2, cy + 50)))
+
+        cancel_rect = pygame.Rect(w // 2 - 100, h // 2 + 120, 200, 44)
+        self._btn_rects["btn_waiting_cancel"] = cancel_rect
+        hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
+        pygame.draw.rect(self._display, (80, 20, 20) if hover else (30, 10, 10),
+                         cancel_rect, border_radius=10)
+        self._draw_neon_rect(self._display, cancel_rect,
+                             self._neon_color((255, 80, 80), tick) if hover else (120, 40, 40),
+                             width=2, radius=10, glow_radius=6)
+        cancel_lbl = self._fonts["small_retro"].render("CANCEL", True, (255, 255, 255))
+        self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
+        hint = self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100))
+        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 24)))
+
     def _render_menu(self, w, h):
         """Render the main menu — retro-fancy neon style."""
         import math
