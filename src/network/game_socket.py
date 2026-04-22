@@ -8,7 +8,7 @@ import time
 from .protocol import (
     make_msg, parse_msg,
     MSG_SCORE_UPDATE, MSG_GAME_END, MSG_DISCONNECT, MSG_HEARTBEAT,
-    MSG_SONG_SELECT, MSG_GAME_START, MSG_POSE_READY,
+    MSG_SONG_SELECT, MSG_GAME_START, MSG_POSE_READY, MSG_SKELETON_UPDATE,
     GAME_PORT,
 )
 
@@ -23,11 +23,15 @@ class GameSocket:
     Thread-safe for read access to opponent_* attributes.
     """
 
-    def __init__(self, opponent_ip: str):
+    def __init__(self, opponent_ip: str, role: str = "player", host_ip: str = "", client_ip: str = ""):
         self.opponent_ip = opponent_ip
+        self.role = role
+        self.host_ip = host_ip
+        self.client_ip = client_ip
 
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self._sock.bind(("", GAME_PORT))
         self._sock.settimeout(0.05)
 
@@ -43,6 +47,12 @@ class GameSocket:
         self.opponent_connected: bool = False
         self.opponent_finished: bool  = False
         self.opponent_final_score: int = 0
+
+        # Spectator states
+        self.players_state = {
+            self.host_ip: {"score": 0, "combo": 0, "grade": "", "pose": None},
+            self.client_ip: {"score": 0, "combo": 0, "grade": "", "pose": None}
+        }
 
         # optional callbacks (called from recv thread)
         self.on_disconnect = None
@@ -93,6 +103,10 @@ class GameSocket:
         """Send current score snapshot to opponent."""
         self._send(make_msg(MSG_SCORE_UPDATE, score=score, combo=combo, grade=grade))
 
+    def send_skeleton(self, pose_data: list):
+        """Send skeleton metadata to spectators."""
+        self._send(make_msg(MSG_SKELETON_UPDATE, pose=pose_data))
+
     def send_end(self, final_score: int):
         """Notify opponent that this side has finished."""
         self._send(make_msg(MSG_GAME_END, final_score=final_score))
@@ -101,7 +115,13 @@ class GameSocket:
 
     def _send(self, data: bytes):
         try:
-            self._sock.sendto(data, (self.opponent_ip, GAME_PORT))
+            if self.opponent_ip:
+                self._sock.sendto(data, (self.opponent_ip, GAME_PORT))
+        except OSError:
+            pass
+        # Also broadcast for spectators
+        try:
+            self._sock.sendto(data, ("255.255.255.255", GAME_PORT))
         except OSError:
             pass
 
@@ -134,6 +154,21 @@ class GameSocket:
 
             msg = parse_msg(data)
             mtype = msg.get("type")
+            sender_ip = addr[0]
+
+            if self.role == "spectator":
+                if sender_ip in self.players_state:
+                    p = self.players_state[sender_ip]
+                    if mtype == MSG_SCORE_UPDATE:
+                        p["score"] = int(msg.get("score", 0))
+                        p["combo"] = int(msg.get("combo", 0))
+                        p["grade"] = str(msg.get("grade", ""))
+                    elif mtype == MSG_SKELETON_UPDATE:
+                        p["pose"] = msg.get("pose")
+                continue
+
+            if sender_ip != self.opponent_ip:
+                continue
 
             if mtype == MSG_SCORE_UPDATE:
                 self.opponent_score = int(msg.get("score", 0))

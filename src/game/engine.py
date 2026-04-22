@@ -162,9 +162,11 @@ class GameEngine:
 
         # ── 멀티플레이 ───────────────────────────────────────────────
         self._is_multi_mode: bool = False       # 현재 멀티 게임 중 여부
-        self._multi_role: str = ""              # "host" | "client"
+        self._multi_role: str = ""              # "host" | "client" | "spectator"
         self._multi_opponent_ip: str = ""
-        self._multi_discovery = None            # Discovery 인스턴스
+        self._multi_host_ip: str = ""           # spectator: HOST IP
+        self._multi_client_ip: str = ""         # spectator: CLIENT IP
+        self._multi_discovery = None            # Discovery 인스턴스 (host listener 포함)
         self._multi_socket = None               # GameSocket 인스턴스
         self._multi_status_msg: str = ""        # WAITING 화면 상태 메시지
         self._multi_found: bool = False         # 탐색 성공 여부 (WAITING → SONG_SELECT)
@@ -1630,6 +1632,18 @@ class GameEngine:
     def _update_gameplay(self):
         """Fetch async frame and compute score."""
 
+        # 관전 모드에서는 카메라/추론 루프 완전 우회
+        if self._multi_role == "spectator":
+            # 레퍼런스 영상 프레임만 업데이트 (섹션 없이도 동작)
+            if getattr(self, '_async_video_player', None) is not None:
+                vframe_rgb, vframe_seq = self._async_video_player.get_latest_frame_with_seq()
+                if vframe_rgb is not None and vframe_seq != self._ref_video_frame_seq:
+                    self._ref_video_frame_seq = vframe_seq
+                    th, tw = vframe_rgb.shape[:2]
+                    self._ref_video_surf = pygame.image.frombuffer(
+                        vframe_rgb.tobytes(), (tw, th), "RGB")
+            return
+
         if getattr(self, '_async_camera', None) is None:
             return
 
@@ -1804,7 +1818,7 @@ class GameEngine:
                 self._result_data = self._scorer.get_final_result()
                 self.transition_to(GameState.RESULT)
 
-        # ── 멀티플레이: 점수 전송 (판정 주기와 동기화) ────────────
+        # ── 멀티플레이: 점수 + 스켈레톤 전송 (판정 주기와 동기화) ────────────
         if self._is_multi_mode and self._multi_socket and self._current_session:
             if self._scoring_frame_counter == 0:   # 판정 직후
                 self._multi_socket.send_score(
@@ -1812,14 +1826,23 @@ class GameEngine:
                     combo=int(self._scorer.combo),
                     grade=str(self._last_feedback.get("text", "") if self._last_feedback else ""),
                 )
+                # 스켈레톤 메타데이터 전송 (관전자용)
+                if scoring_landmarks is not None:
+                    pose_list = self._landmarks_to_list(scoring_landmarks)
+                    if pose_list is not None:
+                        self._multi_socket.send_skeleton(pose_list)
 
     def _update_waiting(self):
-        """WAITING 상태 처리 — HOST는 연결 후 모드/곡 선택, CLIENT는 곡 수신 후 READY 이동."""
+        """WAITING 상태 처리 — HOST는 연결 후 모드/곡 선택, CLIENT는 곡 수신 후 READY 이동,
+        SPECTATOR는 연결 후 바로 PLAYING(관전) 진입."""
         if self._multi_found:
             self._multi_found = False
             if self._multi_role == "host":
                 # HOST: _multi_connected=True → 렌더링에서 모드 선택 UI 표시
                 pass
+            elif self._multi_role == "spectator":
+                # SPECTATOR: 관전 모드로 PLAYING 진입
+                self.transition_to(GameState.PLAYING)
             else:
                 # CLIENT: 곡을 수신했으면 READY로, 아직이면 계속 대기
                 if self._current_song:
@@ -2809,13 +2832,16 @@ class GameEngine:
                 pygame.draw.circle(surface, (255, 255, 255), (cx, cy), max(joint_radius - 3, 2))
 
     def _render_gameplay(self, w, h):
-        """Render gameplay screen — dual panel layout.
+        """Render gameplay screen.
 
-        LEFT  : 웹캠 전체 화면 + 스켈레톤 오버레이  (파란 네온 테두리)
-        RIGHT : 레퍼런스 영상 (또는 스틱피겨)        (노란/오렌지 네온 테두리)
-        HEADER: 점수/콤보/시간/버튼
-        FOOTER: 곡 정보/조작 안내
+        일반 모드: LEFT=웹캠 + 스켈레톤, RIGHT=레퍼런스 영상
+        관전 모드: 레퍼런스 영상 전체화면 + 두 플레이어 스켈레톤 오버레이 + 점수 HUD
         """
+        # ── 관전 모드 분기 ────────────────────────────────────────
+        if self._multi_role == "spectator":
+            self._render_spectator(w, h)
+            return
+
         HEADER_H = 55
         FOOTER_H = 44          # 여유 있는 하단 영역
         BORDER   = 4          # 패널 테두리 두께
@@ -3061,6 +3087,107 @@ class GameEngine:
         # ══════════════════════════════════════════════════════
         if self._is_multi_mode and self._multi_socket:
             self._render_opponent_score_overlay(w, h, HEADER_H, fy)
+
+    def _render_spectator(self, w, h):
+        """관전 모드 렌더링.
+
+        레퍼런스 댄스 영상을 전체화면으로 표시하고
+        HOST(파란색)와 CLIENT(분홍색)의 스켈레톤, 점수를 오버레이로 표시.
+        """
+        import numpy as np
+        from pose.landmark_utils import SKELETON_CONNECTIONS, DANCE_JOINTS
+
+        sock = self._multi_socket
+        tick = self._neon_tick
+
+        # 배경
+        self._display.fill((4, 3, 14))
+
+        # 레퍼런스 영상 전체화면
+        if self._ref_video_surf is not None:
+            vs = self._ref_video_surf
+            vw, vh = vs.get_size()
+            scale = min(w / vw, h / vh)
+            dw, dh = int(vw * scale), int(vh * scale)
+            vx = (w - dw) // 2
+            vy = (h - dh) // 2
+            scaled = pygame.transform.scale(vs, (dw, dh))
+            dim = pygame.Surface((dw, dh), pygame.SRCALPHA)
+            dim.fill((0, 0, 0, 100))
+            self._display.blit(scaled, (vx, vy))
+            self._display.blit(dim, (vx, vy))
+        else:
+            lbl = self._fonts["body"].render("SPECTATING...", True, (80, 70, 110))
+            self._display.blit(lbl, lbl.get_rect(center=(w // 2, h // 2)))
+
+        # 스켈레톤 오버레이: HOST=파란색, CLIENT=분홍색
+        if sock is not None:
+            player_configs = [
+                (self._multi_host_ip,   (60, 180, 255), (180, 230, 255)),
+                (self._multi_client_ip, (255, 80, 160),  (255, 180, 220)),
+            ]
+            for player_ip, line_col, joint_col in player_configs:
+                state = sock.players_state.get(player_ip)
+                if state is None:
+                    continue
+                pose = state.get("pose")
+                if pose is None:
+                    continue
+                try:
+                    lm = np.asarray(pose, dtype=np.float32)
+                    if lm.shape != (33, 4):
+                        continue
+                except Exception:
+                    continue
+                self._draw_stick_figure(
+                    self._display, lm, (0, 0, w, h),
+                    line_color=line_col, joint_color=joint_col,
+                    line_width=4, joint_radius=7,
+                )
+
+        # 점수 HUD (상단 좌우 패널)
+        PANEL_W = max(160, w // 5)
+        PANEL_H = 90
+        PANEL_Y = 12
+        PAD = 10
+
+        player_hud = [
+            (self._multi_host_ip,   "P1 HOST",   (40, 100, 200), (60, 180, 255),  12),
+            (self._multi_client_ip, "P2 CLIENT", (150, 20, 100), (255, 80, 160), w - PANEL_W - 12),
+        ]
+        for player_ip, tag, bg_col, border_col, px in player_hud:
+            state = sock.players_state.get(player_ip) if sock else None
+            score = state["score"] if state else 0
+            combo = state["combo"] if state else 0
+            grade = state["grade"] if state else ""
+
+            bg = pygame.Surface((PANEL_W, PANEL_H), pygame.SRCALPHA)
+            bg.fill((*bg_col, 210))
+            self._display.blit(bg, (px, PANEL_Y))
+
+            border_rect = pygame.Rect(px, PANEL_Y, PANEL_W, PANEL_H)
+            self._draw_neon_rect(self._display, border_rect,
+                                 self._neon_color(border_col, tick),
+                                 width=2, radius=8, glow_radius=4)
+
+            tag_surf = self._fonts["small_retro"].render(tag, True, border_col)
+            self._display.blit(tag_surf, (px + PAD, PANEL_Y + PAD))
+
+            score_col = self._neon_color(border_col, tick)
+            score_surf = self._fonts["score_retro"].render(
+                f"{int(score):06d}", True, score_col)
+            self._display.blit(score_surf, (px + PAD, PANEL_Y + PAD + 18))
+
+            combo_txt = f"x{combo}" if combo > 1 else ""
+            info = f"{grade}  {combo_txt}".strip()
+            if info:
+                info_surf = self._fonts["small_retro"].render(info, True, (230, 230, 255))
+                self._display.blit(info_surf, (px + PAD, PANEL_Y + PANEL_H - 22))
+
+        # 관전 뱃지 (화면 중앙 상단)
+        spec_col = self._neon_color((200, 80, 255), tick)
+        spec_lbl = self._fonts["small_retro"].render("SPECTATING", True, spec_col)
+        self._display.blit(spec_lbl, spec_lbl.get_rect(center=(w // 2, PANEL_Y + PANEL_H // 2)))
 
     def _render_opponent_score_overlay(self, w, h, header_h, footer_y):
         """게임 화면 오른쪽 하단 구석에 상대방 점수를 작은 패널로 표시.
@@ -4035,6 +4162,30 @@ class GameEngine:
         self._multi_opponent_ip = opponent_ip
         self._multi_discovery = None
 
+        if role == "spectator":
+            # SPECTATOR: host_ip,client_ip 파싱
+            parts = opponent_ip.split(",")
+            self._multi_host_ip = parts[0] if parts else ""
+            self._multi_client_ip = parts[1] if len(parts) > 1 else ""
+            from network.game_socket import GameSocket
+            sock = GameSocket(
+                opponent_ip="",   # 전송 대상 없음 (수신 전용)
+                role="spectator",
+                host_ip=self._multi_host_ip,
+                client_ip=self._multi_client_ip,
+            )
+            sock.on_disconnect = self._on_multi_disconnect
+            # 관전자도 HOST가 브로드캐스트하는 곡 정보를 수신하여 레퍼런스 영상 로드
+            sock.on_song_select = self._on_multi_song_received
+            sock.start()
+            self._multi_socket = sock
+
+            self._multi_found = True
+            self._multi_connected = True
+            self._multi_status_msg = f"관전 모드! HOST={self._multi_host_ip}"
+            print(f"[MULTI] 관전 모드 진입: host={self._multi_host_ip} client={self._multi_client_ip}", flush=True)
+            return
+
         # GameSocket 생성 + 시작
         from network.game_socket import GameSocket
         sock = GameSocket(opponent_ip)
@@ -4046,6 +4197,12 @@ class GameEngine:
             # CLIENT: HOST의 곡 선택 수신 + 시작 신호 수신
             sock.on_song_select = self._on_multi_song_received
             sock.on_game_start  = self._on_multi_game_start
+        if role == "host":
+            # HOST: 연결 직후 관전자 대기용 리스너 시작
+            from network.discovery import Discovery
+            if self._multi_discovery is None:
+                self._multi_discovery = Discovery()
+            self._multi_discovery.start_host_listener(client_ip=opponent_ip)
         sock.start()
         self._multi_socket = sock
 
@@ -4072,7 +4229,7 @@ class GameEngine:
         print("[MULTI] 상대방 연결 끊김", flush=True)
 
     def _on_multi_song_received(self, song_id: str, mode: str = "practice"):
-        """CLIENT: HOST가 선택한 곡+모드를 수신 — 백그라운드 스레드에서 호출."""
+        """CLIENT/SPECTATOR: HOST가 선택한 곡+모드를 수신 — 백그라운드 스레드에서 호출."""
         self._current_mode = mode
         self._multi_mode_selected = True
         for song in self._songs:
@@ -4080,7 +4237,7 @@ class GameEngine:
                 self._current_song = song
                 break
         self._multi_found = True  # WAITING 화면 루프에서 진행 트리거
-        print(f"[MULTI] HOST 곡/모드 수신: song={song_id} mode={mode}", flush=True)
+        print(f"[MULTI] HOST 곡/모드 수신: song={song_id} mode={mode} (role={self._multi_role})", flush=True)
 
     def _on_multi_game_start(self):
         """CLIENT: HOST의 카운트다운 시작 신호 수신 — 백그라운드 스레드에서 호출."""
@@ -4125,6 +4282,8 @@ class GameEngine:
             self._is_multi_mode = False
             self._multi_role = ""
             self._multi_opponent_ip = ""
+            self._multi_host_ip = ""
+            self._multi_client_ip = ""
             self._multi_my_pose_ready = False
             self._multi_opponent_pose_ready = False
             self._multi_game_start_received = False
@@ -4156,6 +4315,25 @@ class GameEngine:
         elif state == GameState.PLAYING:
             # PAUSED→PLAYING 복귀인 경우에만 세션 유지
             resuming_from_pause = getattr(self, '_prev_state', None) == GameState.PAUSED
+
+            # ── 관전 모드 진입: 카메라/추론 우회, 레퍼런스 영상만 시작 ──
+            if self._multi_role == "spectator":
+                if not resuming_from_pause:
+                    self._load_reference_assets()
+                    self._ref_frame_landmarks = None
+                    self._ref_video_frame = None
+                    if getattr(self, '_async_video_player', None) is not None:
+                        self._async_video_player.reset_position()
+                        self._async_video_player.start()
+                    if getattr(self, '_audio_path', None) and os.path.exists(self._audio_path):
+                        try:
+                            pygame.mixer.music.play()
+                        except Exception as e:
+                            print(f"[WARN] 관전 오디오 재생 실패: {e}")
+                else:
+                    pygame.mixer.music.unpause()
+                return   # 아래 일반 초기화 스킵
+
             if resuming_from_pause:
                 pygame.mixer.music.unpause()
             else:
