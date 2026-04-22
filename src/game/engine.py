@@ -855,6 +855,12 @@ class GameEngine:
             elif self.state in (GameState.READY, GameState.COUNTDOWN):
                 if self._is_multi_mode:
                     self._multi_disconnected_by_me = True
+                    if self._multi_socket:
+                        try:
+                            self._multi_socket.stop()
+                        except Exception:
+                            pass
+                        self._multi_socket = None
                 else:
                     self.transition_to(GameState.SONG_SELECT)
             elif self.state == GameState.PAUSED:
@@ -1145,6 +1151,12 @@ class GameEngine:
             if not rect.collidepoint(pos):
                 continue
 
+            # WAITING의 cancel 버튼은 즉시 실행 (double tap 불필요)
+            if btn_name == "btn_waiting_cancel":
+                self._touch_focused_btn = ""
+                self._on_button_press(btn_name)
+                return
+
             if self.state in double_tap_states:
                 if self._touch_focused_btn != btn_name:
                     # 1st tap → 포커스만
@@ -1334,6 +1346,12 @@ class GameEngine:
         elif btn_name == "btn_ready_cancel":
             if self._is_multi_mode:
                 self._multi_disconnected_by_me = True
+                if self._multi_socket:
+                    try:
+                        self._multi_socket.stop()
+                    except Exception:
+                        pass
+                    self._multi_socket = None
             else:
                 self.transition_to(GameState.MENU)
 
@@ -2021,20 +2039,20 @@ class GameEngine:
             msg_surf = self._fonts["body"].render(msg, True, msg_col)
             self._display.blit(msg_surf, msg_surf.get_rect(center=(w // 2, cy + 50)))
 
-            cancel_rect = pygame.Rect(w // 2 - 100, h // 2 + 100, 200, 44)
+            cancel_rect = pygame.Rect(w // 2 - 100, h - 64, 200, 48)
             self._btn_rects["btn_waiting_cancel"] = cancel_rect
             hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
-            pygame.draw.rect(self._display, (80, 20, 20) if hover else (30, 10, 10),
+            focused_cancel = (self._touch_focused_btn == "btn_waiting_cancel")
+            active_c = hover or focused_cancel
+            pygame.draw.rect(self._display, (80, 20, 20) if active_c else (30, 10, 10),
                              cancel_rect, border_radius=10)
             self._draw_neon_rect(self._display, cancel_rect,
-                                 self._neon_color((255, 80, 80), tick) if hover else (120, 40, 40),
+                                 self._neon_color((255, 80, 80), tick) if active_c else (120, 40, 40),
                                  width=2, radius=10, glow_radius=6)
             cancel_lbl = self._fonts["small_retro"].render("CANCEL", True, (255, 255, 255))
             self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
-            self._display.blit(
-                self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100)),
-                self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100)).get_rect(center=(w // 2, h - 24))
-            )
+            hint_surf = self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100))
+            self._display.blit(hint_surf, hint_surf.get_rect(center=(w // 2, h - 14)))
             return
 
         # ── 단계 2: HOST 연결됨 — 모드 선택 ──────────────────────
@@ -2120,8 +2138,8 @@ class GameEngine:
                 self._display.blit(icon_surf, icon_surf.get_rect(midleft=(base_lx, cy_btn)))
                 self._display.blit(lbl_surf,  lbl_surf.get_rect(midleft=(base_lx + icon_surf.get_width() + 16, cy_btn)))
 
-            # CANCEL 버튼
-            cancel_rect = pygame.Rect(w // 2 - 80, h - 52, 160, 34)
+            # CANCEL 버튼 (하단 고정, 충분한 크기)
+            cancel_rect = pygame.Rect(w // 2 - 100, h - 64, 200, 48)
             self._btn_rects["btn_waiting_cancel"] = cancel_rect
             focused_c = (focus_list[focus_idx] == "btn_waiting_cancel")
             hover_c   = cancel_rect.collidepoint(pygame.mouse.get_pos())
@@ -2130,7 +2148,7 @@ class GameEngine:
                              cancel_rect, border_radius=10)
             pygame.draw.rect(self._display,
                              self._neon_color((255, 80, 80), tick) if active_c else (120, 40, 40),
-                             cancel_rect, 2 if not focused_c else 3, border_radius=10)
+                             cancel_rect, 3 if focused_c else 2, border_radius=10)
             cancel_lbl = self._fonts["small_retro"].render("< CANCEL", True,
                                                             (255, 200, 200) if active_c else (180, 120, 120))
             self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
@@ -2162,20 +2180,22 @@ class GameEngine:
             f"연결됨: {self._multi_opponent_ip}", True, (100, 180, 120))
         self._display.blit(ip_surf, ip_surf.get_rect(center=(w // 2, cy + 50)))
 
-        # CANCEL 버튼
-        cancel_rect = pygame.Rect(w // 2 - 100, h // 2 + 120, 200, 44)
+        # CANCEL 버튼 (하단 고정)
+        cancel_rect = pygame.Rect(w // 2 - 100, h - 64, 200, 48)
         self._btn_rects["btn_waiting_cancel"] = cancel_rect
         hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
-        bg = (80, 20, 20) if hover else (30, 10, 10)
+        focused_cancel = (self._touch_focused_btn == "btn_waiting_cancel")
+        active_c = hover or focused_cancel
+        bg = (80, 20, 20) if active_c else (30, 10, 10)
         pygame.draw.rect(self._display, bg, cancel_rect, border_radius=10)
-        border_col = self._neon_color((255, 80, 80), tick) if hover else (120, 40, 40)
+        border_col = self._neon_color((255, 80, 80), tick) if active_c else (120, 40, 40)
         self._draw_neon_rect(self._display, cancel_rect, border_col, width=2, radius=10, glow_radius=6)
         cancel_lbl = self._fonts["small_retro"].render("CANCEL", True, (255, 255, 255))
         self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
 
         hint_col = (80, 70, 100)
         hint = self._fonts["small_retro"].render("ESC: CANCEL", True, hint_col)
-        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 24)))
+        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 14)))
 
     def _render_waiting(self, w, h):
         """MULTI PLAY 상대방 탐색 중 화면."""
@@ -2214,7 +2234,7 @@ class GameEngine:
             msg_surf = self._fonts["body"].render(msg, True, msg_col)
             self._display.blit(msg_surf, msg_surf.get_rect(center=(w // 2, cy + 50)))
 
-            cancel_rect = pygame.Rect(w // 2 - 100, h // 2 + 100, 200, 44)
+            cancel_rect = pygame.Rect(w // 2 - 120, h - 80, 240, 56)
             self._btn_rects["btn_waiting_cancel"] = cancel_rect
             hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
             pygame.draw.rect(self._display, (80, 20, 20) if hover else (30, 10, 10),
@@ -2225,7 +2245,7 @@ class GameEngine:
             cancel_lbl = self._fonts["small_retro"].render("CANCEL", True, (255, 255, 255))
             self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
             hint_surf = self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100))
-            self._display.blit(hint_surf, hint_surf.get_rect(center=(w // 2, h - 24)))
+            self._display.blit(hint_surf, hint_surf.get_rect(center=(w // 2, h - 16)))
             return
 
         # ── 단계 2: HOST 연결됨 — 모드 선택 ──────────────────────
@@ -2298,7 +2318,7 @@ class GameEngine:
                 self._display.blit(icon_surf, icon_surf.get_rect(midleft=(base_lx, cy_btn)))
                 self._display.blit(lbl_surf,  lbl_surf.get_rect(midleft=(base_lx + icon_surf.get_width() + 16, cy_btn)))
 
-            cancel_rect = pygame.Rect(w // 2 - 80, h - 52, 160, 34)
+            cancel_rect = pygame.Rect(w // 2 - 120, h - 80, 240, 56)
             self._btn_rects["btn_waiting_cancel"] = cancel_rect
             focused_c = (focus_list[focus_idx] == "btn_waiting_cancel")
             hover_c   = cancel_rect.collidepoint(pygame.mouse.get_pos())
@@ -2337,7 +2357,7 @@ class GameEngine:
             f"연결됨: {self._multi_opponent_ip}", True, (100, 180, 120))
         self._display.blit(ip_surf, ip_surf.get_rect(center=(w // 2, cy + 50)))
 
-        cancel_rect = pygame.Rect(w // 2 - 100, h // 2 + 120, 200, 44)
+        cancel_rect = pygame.Rect(w // 2 - 120, h - 80, 240, 56)
         self._btn_rects["btn_waiting_cancel"] = cancel_rect
         hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
         pygame.draw.rect(self._display, (80, 20, 20) if hover else (30, 10, 10),
@@ -2348,7 +2368,7 @@ class GameEngine:
         cancel_lbl = self._fonts["small_retro"].render("CANCEL", True, (255, 255, 255))
         self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
         hint = self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100))
-        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 24)))
+        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 16)))
 
     def _render_menu(self, w, h):
         """Render the main menu — retro-fancy neon style."""
@@ -2905,20 +2925,17 @@ class GameEngine:
             pulse = 0.75 + 0.25 * math.sin(tick * 3.0)
             wait_col = tuple(int(c * pulse) for c in self._neon_color((80, 220, 255), tick))
             wait_surf = self._fonts["small_retro"].render(wait_msg, True, wait_col)
-            # 반투명 배경 패널
+            # 테두리만 하이라이트 (안쪽 배경 투명)
             pw = wait_surf.get_width() + 32
             ph = wait_surf.get_height() + 18
             px = w // 2 - pw // 2
             py = HEADER_H + body_h // 2 - ph // 2
-            panel = pygame.Surface((pw, ph), pygame.SRCALPHA)
-            panel.fill((0, 0, 0, 150))
-            self._display.blit(panel, (px, py))
             self._draw_neon_rect(self._display, pygame.Rect(px, py, pw, ph),
                                  wait_col, width=2, radius=10, glow_radius=10)
             self._display.blit(wait_surf, wait_surf.get_rect(center=(w // 2, HEADER_H + body_h // 2)))
 
         # 스킵 버튼
-        skip_rect = pygame.Rect(w - 220, HEADER_H + 6, 100, 36)
+        skip_rect = pygame.Rect(w - 230, HEADER_H + 6, 110, 44)
         self._btn_rects["btn_ready_skip"] = skip_rect
         hover_s = skip_rect.collidepoint(pygame.mouse.get_pos())
         focused_s = (getattr(self, '_generic_focus_idx', 0) == 0)
@@ -2931,7 +2948,7 @@ class GameEngine:
         self._display.blit(skip_lbl, skip_lbl.get_rect(center=skip_rect.center))
 
         # 취소 버튼
-        cancel_rect = pygame.Rect(w - 110, HEADER_H + 6, 100, 36)
+        cancel_rect = pygame.Rect(w - 115, HEADER_H + 6, 110, 44)
         self._btn_rects["btn_ready_cancel"] = cancel_rect
         hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
         focused_c = (getattr(self, '_generic_focus_idx', 0) == 1)
