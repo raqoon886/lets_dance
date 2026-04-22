@@ -7,7 +7,7 @@
 최적화된 AI 모델(Scratch 모드)을 사용한 실행 커맨드는 다음과 같습니다:
 
 ```bash
-python src/main.py -s scratch --scratch-model-path data/models/scratch/scratch_gcn_base_infonce_e64.tflite
+python src/main.py
 ```
 
 ### 주요 실행 옵션
@@ -30,7 +30,7 @@ python src/main.py -s scratch --scratch-model-path data/models/scratch/scratch_g
 
 ### 🧠 추론/채점 파이프라인 (비동기 2Hz 연산)
 ```text
-포즈 감지 (MediaPipe/MoveNet) → 정규화 → Ring Buffer (O(1)) 누적 ─[15프레임마다]─> TFLite 추론 → 코사인 유사도
+포즈 감지 (MediaPipe) → 정규화 → Ring Buffer (O(1)) 누적 ─[15프레임마다]─> TFLite 추론 → 코사인 유사도
                                                                                         ↑
                                                                          레퍼런스 임베딩 캐시 (사전 연산 완료)
 ```
