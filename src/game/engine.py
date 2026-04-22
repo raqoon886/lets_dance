@@ -2894,34 +2894,28 @@ class GameEngine:
         msg_surf = self._fonts["body"].render(msg, True, msg_color)
         self._display.blit(msg_surf, msg_surf.get_rect(center=(w // 2, fy + FOOTER_H // 2 - 2)))
 
-        # 멀티플레이: 내 포즈 준비 완료 후 상대방 대기 중 안내
+        # 멀티플레이: 내 포즈 준비 완료 후 상대방 대기 중 안내 (화면 중앙)
         if self._is_multi_mode and self._multi_my_pose_ready:
+            import math
+            tick = self._neon_tick
             if self._multi_role == "host":
                 wait_msg = "POSE READY!  WAITING FOR OPPONENT..."
             else:
                 wait_msg = "POSE READY!  WAITING FOR HOST..."
-            wait_surf = self._fonts["small_retro"].render(
-                wait_msg, True,
-                self._neon_color((80, 220, 255), self._neon_tick))
-            self._display.blit(wait_surf, wait_surf.get_rect(center=(w // 2, fy + FOOTER_H // 2 + 18)))
-
-            # 화면 중앙 READY! 반투명 오버레이
-            import math
-            tick = self._neon_tick
-            pulse = 0.82 + 0.18 * math.sin(tick * 3.5)
-            ready_col = tuple(int(c * pulse) for c in self._neon_color((0, 255, 160), tick))
-            ready_surf = self._fonts["feedback"].render("READY!", True, ready_col)
+            pulse = 0.75 + 0.25 * math.sin(tick * 3.0)
+            wait_col = tuple(int(c * pulse) for c in self._neon_color((80, 220, 255), tick))
+            wait_surf = self._fonts["small_retro"].render(wait_msg, True, wait_col)
             # 반투명 배경 패널
-            rw = ready_surf.get_width() + 40
-            rh = ready_surf.get_height() + 20
-            rx = w // 2 - rw // 2
-            ry = HEADER_H + body_h // 2 - rh // 2
-            panel = pygame.Surface((rw, rh), pygame.SRCALPHA)
-            panel.fill((0, 0, 0, 140))
-            self._display.blit(panel, (rx, ry))
-            self._draw_neon_rect(self._display, pygame.Rect(rx, ry, rw, rh),
-                                 ready_col, width=2, radius=10, glow_radius=14)
-            self._display.blit(ready_surf, ready_surf.get_rect(center=(w // 2, HEADER_H + body_h // 2)))
+            pw = wait_surf.get_width() + 32
+            ph = wait_surf.get_height() + 18
+            px = w // 2 - pw // 2
+            py = HEADER_H + body_h // 2 - ph // 2
+            panel = pygame.Surface((pw, ph), pygame.SRCALPHA)
+            panel.fill((0, 0, 0, 150))
+            self._display.blit(panel, (px, py))
+            self._draw_neon_rect(self._display, pygame.Rect(px, py, pw, ph),
+                                 wait_col, width=2, radius=10, glow_radius=10)
+            self._display.blit(wait_surf, wait_surf.get_rect(center=(w // 2, HEADER_H + body_h // 2)))
 
         # 스킵 버튼
         skip_rect = pygame.Rect(w - 220, HEADER_H + 6, 100, 36)
