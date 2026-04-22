@@ -1905,6 +1905,14 @@ class GameEngine:
 
         w, h = self._display.get_size()
 
+        # 멀티플레이 종료 오버레이 — 최우선 렌더링 (다른 화면 위에 덮어씀)
+        if self._multi_disconnected or self._multi_disconnected_by_me:
+            # 배경은 직전 프레임 유지 (아무것도 안 그리거나, 단색 배경)
+            self._display.fill((6, 4, 18))
+            self._render_multi_disconnect_overlay(w, h)
+            pygame.display.flip()
+            return
+
         if self.state == GameState.MENU:
             self._render_menu(w, h)
         elif self.state == GameState.WAITING:
@@ -1930,10 +1938,6 @@ class GameEngine:
         # 멀티플레이 중 상태 배너 (WAITING 화면 제외 — 이미 타이틀이 있음)
         if self._is_multi_mode and self.state != GameState.WAITING:
             self._render_multi_status_banner(w)
-
-        # 멀티플레이 종료 오버레이
-        if self._multi_disconnected or self._multi_disconnected_by_me:
-            self._render_multi_disconnect_overlay(w, h)
 
         pygame.display.flip()
 
