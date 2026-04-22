@@ -4469,6 +4469,19 @@ class GameEngine:
         if self._multi_role == "spectator":
             # 관전자: GAME_START 수신 시각 기록 → 카운트다운(2초) 후 재생 시작
             self._spectator_game_start_at = time.time()
+            self._spectator_result_active = False   # 결과 화면 닫기 (retry 시)
+            self._spectator_playback_started = False
+            self._spectator_countdown_active = False
+            # retry(같은 곡) 시 players_state 초기화
+            if self._multi_socket is not None:
+                for ip in self._multi_socket.players_state:
+                    self._multi_socket.players_state[ip] = {
+                        "score": 0, "combo": 0, "grade": "", "pose": None,
+                        "finished": False, "final_score": 0
+                    }
+            # retry 시 영상/음악 리셋 (에셋은 이미 로드됨)
+            if getattr(self, '_async_video_player', None) is not None:
+                self._async_video_player.reset_position()
             print("[SPECTATOR] GAME_START 수신 → 카운트다운 후 재생 예정", flush=True)
             return
         self._multi_game_start_received = True
