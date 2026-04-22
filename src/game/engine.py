@@ -1642,7 +1642,7 @@ class GameEngine:
 
         # 관전 모드에서는 카메라/추론 루프 완전 우회
         if self._multi_role == "spectator":
-            COUNTDOWN_DELAY = 2.0  # 카운트다운 대기 시간 (플레이어와 동기화)
+            COUNTDOWN_DELAY = 3.0  # 카운트다운 대기 시간 (플레이어 3→2→1과 동기화)
 
             # 관전자 곡 수신 후 레퍼런스 에셋 로드 (메인 스레드에서 안전하게 1회 처리)
             if self._spectator_reload_assets:
@@ -3152,30 +3152,42 @@ class GameEngine:
         # 배경
         self._display.fill((4, 3, 14))
 
-        # 레퍼런스 영상 전체화면
+        # ── 3-컬럼 레이아웃: HOST 스켈레톤 | 레퍼런스 영상 | CLIENT 스켈레톤 ──
+        SKEL_RATIO = 0.25  # 각 스켈레톤 패널이 화면 폭의 25%
+        skel_w = int(w * SKEL_RATIO)
+        vid_x = skel_w
+        vid_w = w - 2 * skel_w
+
+        # 스켈레톤 패널 배경 (좌/우)
+        for sx in (0, w - skel_w):
+            panel_bg = pygame.Surface((skel_w, h), pygame.SRCALPHA)
+            panel_bg.fill((10, 8, 30, 200))
+            self._display.blit(panel_bg, (sx, 0))
+
+        # 레퍼런스 영상 (중앙)
         if self._ref_video_surf is not None:
             vs = self._ref_video_surf
             vw, vh = vs.get_size()
-            scale = min(w / vw, h / vh)
+            scale = min(vid_w / vw, h / vh)
             dw, dh = int(vw * scale), int(vh * scale)
-            vx = (w - dw) // 2
+            vx = vid_x + (vid_w - dw) // 2
             vy = (h - dh) // 2
             scaled = pygame.transform.scale(vs, (dw, dh))
             dim = pygame.Surface((dw, dh), pygame.SRCALPHA)
-            dim.fill((0, 0, 0, 100))
+            dim.fill((0, 0, 0, 80))
             self._display.blit(scaled, (vx, vy))
             self._display.blit(dim, (vx, vy))
         else:
             lbl = self._fonts["body"].render("SPECTATING...", True, (80, 70, 110))
             self._display.blit(lbl, lbl.get_rect(center=(w // 2, h // 2)))
 
-        # 스켈레톤 오버레이: HOST=파란색, CLIENT=분홍색
+        # 스켈레톤: HOST=왼쪽 패널(파란색), CLIENT=오른쪽 패널(분홍색)
         if sock is not None:
             player_configs = [
-                (self._multi_host_ip,   (60, 180, 255), (180, 230, 255)),
-                (self._multi_client_ip, (255, 80, 160),  (255, 180, 220)),
+                (self._multi_host_ip,   (60, 180, 255), (180, 230, 255), (0, 0, skel_w, h)),
+                (self._multi_client_ip, (255, 80, 160),  (255, 180, 220), (w - skel_w, 0, skel_w, h)),
             ]
-            for player_ip, line_col, joint_col in player_configs:
+            for player_ip, line_col, joint_col, panel_rect in player_configs:
                 state = sock.players_state.get(player_ip)
                 if state is None:
                     continue
@@ -3189,7 +3201,7 @@ class GameEngine:
                 except Exception:
                     continue
                 self._draw_stick_figure(
-                    self._display, lm, (0, 0, w, h),
+                    self._display, lm, panel_rect,
                     line_color=line_col, joint_color=joint_col,
                     line_width=4, joint_radius=7,
                 )
