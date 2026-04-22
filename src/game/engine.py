@@ -174,6 +174,8 @@ class GameEngine:
         self._multi_opponent_pose_ready: bool = False  # 상대방 포즈 감지 3초 완료
         self._multi_mode_selected: bool = False        # 모드 선택 완료 여부
         self._multi_connected: bool = False            # Discovery 성공, 연결된 상태
+        self._multi_disconnected: bool = False         # 상대방 연결 끊김 알림 플래그
+        self._multi_disconnected_by_me: bool = False   # 내가 나간 경우 플래그
 
     def initialize(self):
         """
@@ -851,7 +853,10 @@ class GameEngine:
                 else:
                     self.transition_to(GameState.MENU)
             elif self.state in (GameState.READY, GameState.COUNTDOWN):
-                self.transition_to(GameState.SONG_SELECT)
+                if self._is_multi_mode:
+                    self._multi_disconnected_by_me = True
+                else:
+                    self.transition_to(GameState.SONG_SELECT)
             elif self.state == GameState.PAUSED:
                 self.transition_to(GameState.PLAYING)
             elif self.state in (GameState.PLAYING,):
@@ -927,6 +932,13 @@ class GameEngine:
                             if ch and ch.isprintable() and len(self._name_input_text) < 16:
                                 self._name_input_text += ch
                     continue  # 이름 입력 중엔 다른 키 처리 건너뜀
+
+                # 멀티플레이 종료 오버레이 활성 중: ENTER/ESC → OK 처리
+                if self._multi_disconnected or self._multi_disconnected_by_me:
+                    if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER,
+                                     pygame.K_SPACE, pygame.K_ESCAPE):
+                        self._on_button_press("btn_multi_disconnect_ok")
+                    continue  # 오버레이 중 다른 키 차단
 
                 # ESC → 뒤로가기
                 if event.key == pygame.K_ESCAPE:
@@ -1121,6 +1133,12 @@ class GameEngine:
         MOUSEMOTION으로 이미 hover된 버튼은 이미 focused 상태이므로
         마우스 클릭 시 즉시 실행된다.
         """
+        # 멀티플레이 종료 오버레이 활성 중: OK 버튼만 처리
+        if self._multi_disconnected or self._multi_disconnected_by_me:
+            ok_rect = self._btn_rects.get("btn_multi_disconnect_ok")
+            if ok_rect and ok_rect.collidepoint(pos):
+                self._on_button_press("btn_multi_disconnect_ok")
+            return
         double_tap_states = (GameState.MENU, GameState.SONG_SELECT, GameState.WAITING)
 
         for btn_name, rect in self._btn_rects.items():
@@ -1288,6 +1306,18 @@ class GameEngine:
             self._multi_mode_selected = False
             self._multi_connected = False
             self.transition_to(GameState.MENU)
+        elif btn_name == "btn_multi_disconnect_ok":
+            # 멀티플레이 종료 오버레이 확인 → 멀티 상태 초기화 후 MENU
+            self._multi_disconnected = False
+            self._multi_disconnected_by_me = False
+            self._is_multi_mode = False
+            self._multi_connected = False
+            self._multi_socket = None
+            self._multi_role = ""
+            self._multi_opponent_ip = ""
+            self._multi_my_pose_ready = False
+            self._multi_opponent_pose_ready = False
+            self.transition_to(GameState.MENU)
         elif btn_name == "btn_settings_vol_down":
             self._bgm_volume = max(0.0, round(self._bgm_volume - 0.1, 1))
             pygame.mixer.music.set_volume(self._bgm_volume)
@@ -1295,11 +1325,17 @@ class GameEngine:
             self._bgm_volume = min(1.0, round(self._bgm_volume + 0.1, 1))
             pygame.mixer.music.set_volume(self._bgm_volume)
         elif btn_name == "btn_countdown_cancel":
-            self.transition_to(GameState.MENU)
+            if self._is_multi_mode:
+                self._multi_disconnected_by_me = True
+            else:
+                self.transition_to(GameState.MENU)
         elif btn_name == "btn_ready_skip":
             self.transition_to(GameState.COUNTDOWN)
         elif btn_name == "btn_ready_cancel":
-            self.transition_to(GameState.MENU)
+            if self._is_multi_mode:
+                self._multi_disconnected_by_me = True
+            else:
+                self.transition_to(GameState.MENU)
 
     def _update(self):
         """Update game state based on current state."""
@@ -1309,6 +1345,10 @@ class GameEngine:
         # 피드백 나이 타이머 (등장 후 경과시간, 애니메이션 progress용)
         if self._last_feedback is not None:
             self._feedback_age += 1.0 / self.TARGET_FPS
+
+        # 멀티플레이 연결 끊김 오버레이: 확인 버튼 누를 때까지 유지
+        if self._multi_disconnected or self._multi_disconnected_by_me:
+            return  # 게임 로직 정지, 렌더링은 계속됨
 
         if self.state == GameState.WAITING:
             self._update_waiting()
@@ -1859,6 +1899,10 @@ class GameEngine:
         if self._is_multi_mode and self.state != GameState.WAITING:
             self._render_multi_status_banner(w)
 
+        # 멀티플레이 종료 오버레이
+        if self._multi_disconnected or self._multi_disconnected_by_me:
+            self._render_multi_disconnect_overlay(w, h)
+
         pygame.display.flip()
 
     def _render_multi_status_banner(self, w):
@@ -1880,7 +1924,67 @@ class GameEngine:
         pygame.draw.rect(self._display, col, pygame.Rect(bx, by, bw, bh), 1, border_radius=6)
         self._display.blit(surf, (bx + 8, by + 4))
 
-    def _render_waiting(self, w, h):
+    def _render_multi_disconnect_overlay(self, w, h):
+        """멀티플레이 연결 종료 오버레이 (전체 화면 반투명)."""
+        import math
+        tick = self._neon_tick
+
+        # 반투명 배경
+        overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 200))
+        self._display.blit(overlay, (0, 0))
+
+        box_w, box_h = min(520, w - 40), 260
+        bx = w // 2 - box_w // 2
+        by = h // 2 - box_h // 2
+
+        # 박스 배경
+        box_surf = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+        box_surf.fill((18, 8, 38, 240))
+        self._display.blit(box_surf, (bx, by))
+
+        if self._multi_disconnected_by_me:
+            title_col = self._neon_color((255, 160, 60), tick)
+            title_txt = "MULTI PLAY ENDED"
+            body_txt  = "You have left the multiplayer session."
+        else:
+            title_col = self._neon_color((255, 60, 100), tick)
+            title_txt = "CONNECTION LOST"
+            body_txt  = "Opponent disconnected from the session."
+
+        # 테두리 네온 글로우
+        self._draw_neon_rect(self._display, pygame.Rect(bx, by, box_w, box_h),
+                             title_col, width=2, radius=14, glow_radius=12)
+
+        # 아이콘 (깜빡이는 !)
+        icon_alpha = int(180 + 75 * math.sin(tick * 4))
+        icon_col = tuple(min(255, int(c * icon_alpha / 255)) for c in title_col)
+        icon_surf = self._fonts["feedback"].render("!", True, icon_col)
+        self._display.blit(icon_surf, icon_surf.get_rect(center=(w // 2, by + 72)))
+
+        # 타이틀
+        t_surf = self._fonts["result_big"].render(title_txt, True, title_col)
+        self._display.blit(t_surf, t_surf.get_rect(center=(w // 2, by + 130)))
+
+        # 설명
+        b_surf = self._fonts["body"].render(body_txt, True, (200, 190, 220))
+        self._display.blit(b_surf, b_surf.get_rect(center=(w // 2, by + 165)))
+
+        # 확인 버튼
+        btn_rect = pygame.Rect(w // 2 - 90, by + box_h - 58, 180, 42)
+        hover = btn_rect.collidepoint(pygame.mouse.get_pos())
+        pygame.draw.rect(self._display, (60, 20, 80) if hover else (35, 10, 55),
+                         btn_rect, border_radius=10)
+        self._draw_neon_rect(self._display, btn_rect,
+                             self._neon_color((200, 80, 255), tick) if hover else (120, 50, 160),
+                             width=2, radius=10, glow_radius=6)
+        ok_lbl = self._fonts["small_retro"].render("OK", True, (255, 255, 255))
+        self._display.blit(ok_lbl, ok_lbl.get_rect(center=btn_rect.center))
+        self._btn_rects["btn_multi_disconnect_ok"] = btn_rect
+
+        # 힌트
+        hint = self._fonts["small_retro"].render("Press ENTER or click OK", True, (80, 70, 100))
+        self._display.blit(hint, hint.get_rect(center=(w // 2, by + box_h + 14)))
         """MULTI PLAY 상대방 탐색 중 화면."""
         import math
         tick = self._neon_tick
@@ -2627,6 +2731,24 @@ class GameEngine:
                 wait_msg, True,
                 self._neon_color((80, 220, 255), self._neon_tick))
             self._display.blit(wait_surf, wait_surf.get_rect(center=(w // 2, fy + FOOTER_H // 2 + 18)))
+
+            # 화면 중앙 READY! 반투명 오버레이
+            import math
+            tick = self._neon_tick
+            pulse = 0.82 + 0.18 * math.sin(tick * 3.5)
+            ready_col = tuple(int(c * pulse) for c in self._neon_color((0, 255, 160), tick))
+            ready_surf = self._fonts["feedback"].render("READY!", True, ready_col)
+            # 반투명 배경 패널
+            rw = ready_surf.get_width() + 40
+            rh = ready_surf.get_height() + 20
+            rx = w // 2 - rw // 2
+            ry = HEADER_H + body_h // 2 - rh // 2
+            panel = pygame.Surface((rw, rh), pygame.SRCALPHA)
+            panel.fill((0, 0, 0, 140))
+            self._display.blit(panel, (rx, ry))
+            self._draw_neon_rect(self._display, pygame.Rect(rx, ry, rw, rh),
+                                 ready_col, width=2, radius=10, glow_radius=14)
+            self._display.blit(ready_surf, ready_surf.get_rect(center=(w // 2, HEADER_H + body_h // 2)))
 
         # 스킵 버튼
         skip_rect = pygame.Rect(w - 220, HEADER_H + 6, 100, 36)
@@ -4068,8 +4190,9 @@ class GameEngine:
         self._multi_status_msg = msg
 
     def _on_multi_disconnect(self):
-        """게임 중 연결 끊김."""
+        """게임 중 연결 끊김 — 백그라운드 스레드에서 호출."""
         print("[MULTI] 상대방 연결 끊김", flush=True)
+        self._multi_disconnected = True
 
     def _on_multi_song_received(self, song_id: str, mode: str = "practice"):
         """CLIENT: HOST가 선택한 곡+모드를 수신 — 백그라운드 스레드에서 호출."""
