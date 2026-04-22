@@ -157,6 +157,18 @@ class GameSocket:
             sender_ip = addr[0].strip()
 
             if self.role == "spectator":
+                # 수신 데이터 디버깅 (매 5초 1회)
+                import time as _time
+                _now = _time.time()
+                if not hasattr(self, '_last_spec_debug'):
+                    self._last_spec_debug = 0
+                if _now - self._last_spec_debug > 5.0:
+                    self._last_spec_debug = _now
+                    print(f"[SPECTATOR-DBG] sender={sender_ip} type={mtype} "
+                          f"keys={list(self.players_state.keys())} "
+                          f"host_pose={'Y' if self.players_state.get(self.host_ip, {}).get('pose') else 'N'} "
+                          f"client_pose={'Y' if self.players_state.get(self.client_ip, {}).get('pose') else 'N'}",
+                          flush=True)
                 # Check if this IP is one of our tracked players
                 if sender_ip in self.players_state:
                     p = self.players_state[sender_ip]
