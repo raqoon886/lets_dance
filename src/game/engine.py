@@ -783,7 +783,7 @@ class GameEngine:
                                    "btn_multi_play", "btn_leaderboard", "btn_settings", "btn_quit"],
             GameState.WAITING:    ["btn_waiting_cancel"],  # 동적으로 덮어씀 (_get_focus_list 참조)
             GameState.PAUSED:     ["btn_pause", "btn_gameplay_menu"],
-            GameState.RESULT:     ["btn_retry", "btn_result_songs", "btn_result_menu"],
+            GameState.RESULT:     ["btn_result_record", "btn_retry", "btn_result_songs", "btn_result_menu"],
             GameState.SETTINGS:   ["btn_settings_vol_down", "btn_settings_vol_up", "btn_back"],
             GameState.READY:      ["btn_ready_skip", "btn_ready_cancel"],
             GameState.COUNTDOWN:  ["btn_countdown_cancel"],
@@ -1268,6 +1268,11 @@ class GameEngine:
             else:
                 # 첫 번째 탭 → 하이라이트만
                 self._name_btn_pending = btn_name
+        elif btn_name == "btn_result_record":
+            self._name_btn_pending = ""
+            self._name_input_active = True
+            self._stdin_text_mode = True
+            self._name_input_text = self._player_name  # 이전 이름 미리 채움
         elif btn_name == "btn_retry":
             self._name_btn_pending = ""
             self.transition_to(GameState.READY)
@@ -2704,16 +2709,28 @@ class GameEngine:
         msg_surf = self._fonts["body"].render(msg, True, msg_color)
         self._display.blit(msg_surf, msg_surf.get_rect(center=(w // 2, fy + FOOTER_H // 2 - 2)))
 
-        # 멀티플레이: 내 포즈 준비 완료 후 상대방 대기 중 안내
+        # 멀티플레이: 내 포즈 준비 완료 후 상대방 대기 중 안내 (화면 중앙)
         if self._is_multi_mode and self._multi_my_pose_ready:
+            import math
+            tick = self._neon_tick
             if self._multi_role == "host":
                 wait_msg = "POSE READY!  WAITING FOR OPPONENT..."
             else:
                 wait_msg = "POSE READY!  WAITING FOR HOST..."
-            wait_surf = self._fonts["small_retro"].render(
-                wait_msg, True,
-                self._neon_color((80, 220, 255), self._neon_tick))
-            self._display.blit(wait_surf, wait_surf.get_rect(center=(w // 2, fy + FOOTER_H // 2 + 18)))
+            pulse = 0.75 + 0.25 * math.sin(tick * 3.0)
+            wait_col = tuple(int(c * pulse) for c in self._neon_color((80, 220, 255), tick))
+            wait_surf = self._fonts["small_retro"].render(wait_msg, True, wait_col)
+            # 반투명 배경 패널
+            pw = wait_surf.get_width() + 32
+            ph = wait_surf.get_height() + 18
+            px = w // 2 - pw // 2
+            py = HEADER_H + body_h // 2 - ph // 2
+            panel = pygame.Surface((pw, ph), pygame.SRCALPHA)
+            panel.fill((0, 0, 0, 180))
+            self._display.blit(panel, (px, py))
+            self._draw_neon_rect(self._display, pygame.Rect(px, py, pw, ph),
+                                 wait_col, width=2, radius=10, glow_radius=0)
+            self._display.blit(wait_surf, wait_surf.get_rect(center=(w // 2, HEADER_H + body_h // 2)))
 
         # 스킵 버튼
         skip_rect = pygame.Rect(w - 220, HEADER_H + 6, 100, 36)
@@ -3457,7 +3474,7 @@ class GameEngine:
 
         # +점수 (0점이라도 표시)
         if pts >= 0 and alpha > 30:
-            pts_surf = self._fonts["feedback"].render(f"+{pts}", True, (255, 240, 80))
+            pts_surf = self._fonts["feedback"].render(f"+{pts}", True, color)
             pts_surf = pygame.transform.scale(pts_surf,
                 (max(1, int(pts_surf.get_width() * 0.6)),
                  max(1, int(pts_surf.get_height() * 0.6))))
@@ -3547,18 +3564,44 @@ class GameEngine:
 
         # ── 하단 버튼 (공통) ─────────────────────────────────────
         mouse_pos = pygame.mouse.get_pos()
-        total_w = BTN_W * 3 + btn_gap * 2
-        btn_x   = w // 2 - total_w // 2
+
+        # RECORD NAME 버튼 (프리스타일 제외) — 4개 버튼 전체를 중앙 정렬
+        RECORD_BTN_H = BTN_H
+        if self._current_mode != "freestyle":
+            # 4개 버튼 전체 너비 기준으로 중앙 정렬
+            total_w = BTN_W * 4 + btn_gap * 3
+            btn_x   = w // 2 - total_w // 2
+            rec_rect = pygame.Rect(btn_x, btn_area_y, BTN_W, RECORD_BTN_H)
+            self._btn_rects["btn_result_record"] = rec_rect
+            rec_hover   = rec_rect.collidepoint(mouse_pos)
+            rec_focused = (getattr(self, '_generic_focus_idx', 0) == 0)
+            rec_saved   = bool(self._player_name)
+            rec_base    = (30, 80, 150) if rec_saved else (120, 60, 20)
+            rec_color   = tuple(min(c + 50, 255) for c in rec_base) if (rec_hover or rec_focused) else rec_base
+            pygame.draw.rect(self._display, rec_color, rec_rect, border_radius=14)
+            rec_border  = (255, 255, 100) if rec_focused else (0, 200, 255) if rec_saved else (255, 180, 60)
+            pygame.draw.rect(self._display, rec_border, rec_rect, 3 if rec_focused else 2, border_radius=14)
+            rec_label   = f"✓ {self._player_name[:8]}" if rec_saved else "RECORD"
+            rec_lbl = self._fonts["btn_retro"].render(rec_label, True, (255, 255, 255))
+            self._display.blit(rec_lbl, rec_lbl.get_rect(center=rec_rect.center))
+            # 나머지 3개 버튼 시작 x (RECORD 다음부터)
+            main_btn_x  = btn_x + BTN_W + btn_gap
+            focus_offset = 1   # RETRY=1, SONGS=2, MENU=3
+        else:
+            total_w    = BTN_W * 3 + btn_gap * 2
+            main_btn_x = w // 2 - total_w // 2
+            focus_offset = 0   # RETRY=0, SONGS=1, MENU=2
+
         btn_defs = [
             ("btn_retry",        "RETRY",  (0, 140, 90)),
             ("btn_result_songs", "SONGS",  (60, 100, 200)),
             ("btn_result_menu",  "MENU",   (100, 40, 120)),
         ]
         for i, (btn_name, label, color) in enumerate(btn_defs):
-            rect = pygame.Rect(btn_x + i * (BTN_W + btn_gap), btn_area_y, BTN_W, BTN_H)
+            rect = pygame.Rect(main_btn_x + i * (BTN_W + btn_gap), btn_area_y, BTN_W, BTN_H)
             self._btn_rects[btn_name] = rect
             hover   = rect.collidepoint(mouse_pos)
-            focused = (getattr(self, '_generic_focus_idx', 0) == i)
+            focused = (getattr(self, '_generic_focus_idx', 0) == i + focus_offset)
             draw_color = tuple(min(c + 50, 255) for c in color) if (hover or focused) else color
             pygame.draw.rect(self._display, draw_color, rect, border_radius=14)
             border_col = (255, 255, 100) if focused else (220, 220, 220)
@@ -4513,13 +4556,10 @@ class GameEngine:
                 self._multi_socket.send_end(
                     int(self._result_data.get("total_score", 0))
                 )
-            # 프리스타일은 저장 안 함 / 그 외는 이름 입력 오버레이 표시
+            # 프리스타일은 저장 안 함 / 그 외는 이름 입력 버튼으로 나중에 입력
             if self._current_mode != "freestyle":
-                self._name_input_active = True
-                self._stdin_text_mode = True
-                self._name_input_text = self._player_name  # 이전 이름 미리 채움
-                print(f"\n[NAME] Enter your name + Enter to save  |  Empty + Enter = save without name  |  ESC = save with previous name ({self._player_name or 'none'}): ",
-                      end="", flush=True)
+                self._name_input_active = False
+                self._stdin_text_mode = False
             else:
                 self._name_input_active = False
                 self._stdin_text_mode = False
