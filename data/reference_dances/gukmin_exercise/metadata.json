@@ -1,0 +1,13 @@
+{
+  "id": "gukmin_exercise",
+  "title": "국민체조",
+  "artist": "Let's Dance",
+  "difficulty": 1,
+  "duration": 105,
+  "mode": [
+    "practice"
+  ],
+  "video": "data/reference_dances/gukmin_exercise/video.mp4",
+  "video_fps": 24,
+  "audio": "data/reference_dances/gukmin_exercise/video.mp4"
+}
