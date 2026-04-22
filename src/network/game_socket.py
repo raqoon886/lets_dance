@@ -172,6 +172,10 @@ class GameSocket:
                     mode    = str(msg.get("mode", "practice"))
                     if song_id and self.on_song_select:
                         self.on_song_select(song_id, mode)
+                # MSG_GAME_START: 양쪽 플레이어 준비 완료 → 관전자 영상 재생 시작
+                elif mtype == MSG_GAME_START:
+                    if self.on_game_start:
+                        self.on_game_start()
                 continue
 
             if sender_ip != self.opponent_ip:

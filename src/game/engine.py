@@ -177,6 +177,7 @@ class GameEngine:
         self._multi_mode_selected: bool = False        # 모드 선택 완료 여부
         self._multi_connected: bool = False            # Discovery 성공, 연결된 상태
         self._spectator_reload_assets: bool = False    # 관전자: 곡 수신 후 에셋 재로드 신호
+        self._spectator_start_playback: bool = False   # 관전자: 양쪽 준비 완료 후 재생 시작 신호
 
     def initialize(self):
         """
@@ -1642,11 +1643,21 @@ class GameEngine:
             # 관전자 곡 수신 후 레퍼런스 에셋 로드 (메인 스레드에서 안전하게 1회 처리)
             if self._spectator_reload_assets:
                 self._spectator_reload_assets = False
+                self._spectator_start_playback = False  # 새 곡 로드 시 재생 대기
                 self._ref_landmarks = None  # 이전 곡 캐시 초기화 → 재로드 강제
                 self._load_reference_assets()
+            # 양쪽 플레이어 준비 완료 → 영상/음악 재생 시작 (1회)
+            if self._spectator_start_playback:
+                self._spectator_start_playback = False
+                print("[SPECTATOR] 영상/음악 재생 시작", flush=True)
                 if getattr(self, '_async_video_player', None) is not None:
                     self._async_video_player.reset_position()
                     self._async_video_player.start()
+                if getattr(self, '_audio_path', None) and os.path.exists(self._audio_path):
+                    try:
+                        pygame.mixer.music.play()
+                    except Exception as e:
+                        print(f"[WARN] 관전 오디오 재생 실패: {e}")
             # 레퍼런스 영상 프레임만 업데이트 (섹션 없이도 동작)
             if getattr(self, '_async_video_player', None) is not None:
                 vframe_rgb, vframe_seq = self._async_video_player.get_latest_frame_with_seq()
@@ -4192,6 +4203,8 @@ class GameEngine:
             sock.on_disconnect = self._on_multi_disconnect
             # 관전자도 HOST가 브로드캐스트하는 곡 정보를 수신하여 레퍼런스 영상 로드
             sock.on_song_select = self._on_multi_song_received
+            # 관전자도 양쪽 준비 완료(GAME_START) 신호를 수신하여 영상 재생 시작
+            sock.on_game_start = self._on_multi_game_start
             sock.start()
             self._multi_socket = sock
 
@@ -4264,7 +4277,12 @@ class GameEngine:
             print(f"[MULTI] HOST 곡/모드 수신: song={song_id} mode={mode} (role={self._multi_role})", flush=True)
 
     def _on_multi_game_start(self):
-        """CLIENT: HOST의 카운트다운 시작 신호 수신 — 백그라운드 스레드에서 호출."""
+        """CLIENT/SPECTATOR: HOST의 카운트다운 시작 신호 수신 — 백그라운드 스레드에서 호출."""
+        if self._multi_role == "spectator":
+            # 관전자: 양쪽 플레이어 준비 완료 → 메인 스레드에서 영상/음악 시작 예약
+            self._spectator_start_playback = True
+            print("[SPECTATOR] 양쪽 준비 완료 → 재생 시작 예약", flush=True)
+            return
         self._multi_game_start_received = True
         print("[MULTI] 시작 신호 수신 → COUNTDOWN", flush=True)
 
@@ -4340,20 +4358,15 @@ class GameEngine:
             # PAUSED→PLAYING 복귀인 경우에만 세션 유지
             resuming_from_pause = getattr(self, '_prev_state', None) == GameState.PAUSED
 
-            # ── 관전 모드 진입: 카메라/추론 우회, 레퍼런스 영상만 시작 ──
+            # ── 관전 모드 진입: 에셋만 로드, 재생은 GAME_START 신호 수신 후 ──
             if self._multi_role == "spectator":
                 if not resuming_from_pause:
                     self._load_reference_assets()
                     self._ref_frame_landmarks = None
                     self._ref_video_frame = None
-                    if getattr(self, '_async_video_player', None) is not None:
-                        self._async_video_player.reset_position()
-                        self._async_video_player.start()
-                    if getattr(self, '_audio_path', None) and os.path.exists(self._audio_path):
-                        try:
-                            pygame.mixer.music.play()
-                        except Exception as e:
-                            print(f"[WARN] 관전 오디오 재생 실패: {e}")
+                    # 영상/음악은 아직 시작하지 않음 → 양쪽 준비 완료(GAME_START) 후 시작
+                    self._spectator_start_playback = False
+                    print("[SPECTATOR] 에셋 로드 완료, 양쪽 준비 완료 대기 중...", flush=True)
                 else:
                     pygame.mixer.music.unpause()
                 return   # 아래 일반 초기화 스킵
