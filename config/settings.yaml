@@ -65,7 +65,7 @@ scoring:
 runtime_smoothing:
   pose_hold_frames: 6              # short pose-detection dropouts reuse the last valid pose
   score_hold_seconds: 0.3          # keep the last feedback visible briefly when no new score is produced
-  model_warmup_direct_fallback: true
+  model_warmup_direct_fallback: false
   fallback_similarity: "angle"     # direct fallback used while scratch/embedding windows are not ready
 
 logging:
