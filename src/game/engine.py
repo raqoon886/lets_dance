@@ -1446,7 +1446,7 @@ class GameEngine:
         import numpy as np
 
         arr = np.asarray(landmarks, dtype=np.float32)
-        return np.round(arr, 6).tolist()
+        return np.round(arr, 3).tolist()
 
     def _open_score_trace_log(self):
         if not self._score_trace_enabled:
