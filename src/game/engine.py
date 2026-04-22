@@ -178,6 +178,8 @@ class GameEngine:
         self._multi_connected: bool = False            # Discovery 성공, 연결된 상태
         self._spectator_reload_assets: bool = False    # 관전자: 곡 수신 후 에셋 재로드 신호
         self._spectator_start_playback: bool = False   # 관전자: 양쪽 준비 완료 후 재생 시작 신호
+        self._spectator_game_start_at: float = 0.0    # 관전자: GAME_START 수신 시각
+        self._spectator_playback_started: bool = False # 관전자: 영상/음악 재생 시작 여부
 
     def initialize(self):
         """
@@ -1640,31 +1642,45 @@ class GameEngine:
 
         # 관전 모드에서는 카메라/추론 루프 완전 우회
         if self._multi_role == "spectator":
+            COUNTDOWN_DELAY = 2.0  # 카운트다운 대기 시간 (플레이어와 동기화)
+
             # 관전자 곡 수신 후 레퍼런스 에셋 로드 (메인 스레드에서 안전하게 1회 처리)
             if self._spectator_reload_assets:
                 self._spectator_reload_assets = False
+                self._spectator_playback_started = False
+                self._spectator_game_start_at = 0.0
                 self._ref_landmarks = None  # 이전 곡 캐시 초기화 → 재로드 강제
                 self._load_reference_assets()
-                if getattr(self, '_async_video_player', None) is not None:
-                    self._async_video_player.reset_position()
-                    self._async_video_player.start()
-                if getattr(self, '_audio_path', None) and os.path.exists(self._audio_path):
-                    try:
-                        pygame.mixer.music.play()
-                    except Exception as e:
-                        print(f"[WARN] 관전 오디오 재생 실패: {e}")
-            # 양쪽 플레이어 준비 완료(GAME_START) → 영상/음악 처음부터 다시 재생 (싱크 맞춤)
-            if self._spectator_start_playback:
-                self._spectator_start_playback = False
-                print("[SPECTATOR] GAME_START 수신 → 영상/음악 위치 리셋 + 재생", flush=True)
-                if getattr(self, '_async_video_player', None) is not None:
-                    self._async_video_player.reset_position()
-                    self._async_video_player.start()
-                if getattr(self, '_audio_path', None) and os.path.exists(self._audio_path):
-                    try:
-                        pygame.mixer.music.play()
-                    except Exception as e:
-                        print(f"[WARN] 관전 오디오 재생 실패: {e}")
+
+            # 영상/음악 재생 시작 조건 판단
+            if not self._spectator_playback_started:
+                should_start = False
+
+                # 조건 1: GAME_START 수신 + 카운트다운 경과
+                if self._spectator_game_start_at > 0:
+                    if time.time() - self._spectator_game_start_at >= COUNTDOWN_DELAY:
+                        should_start = True
+                        print("[SPECTATOR] GAME_START + 카운트다운 완료 → 재생 시작", flush=True)
+
+                # 조건 2 (fallback): GAME_START 못 받았지만 플레이어가 이미 플레이 중
+                if not should_start and self._multi_socket is not None:
+                    for ps in self._multi_socket.players_state.values():
+                        if ps.get("score", 0) > 0 or ps.get("pose") is not None:
+                            should_start = True
+                            print("[SPECTATOR] 플레이어 스코어/스켈레톤 감지 → 재생 시작 (fallback)", flush=True)
+                            break
+
+                if should_start:
+                    self._spectator_playback_started = True
+                    if getattr(self, '_async_video_player', None) is not None:
+                        self._async_video_player.reset_position()
+                        self._async_video_player.start()
+                    if getattr(self, '_audio_path', None) and os.path.exists(self._audio_path):
+                        try:
+                            pygame.mixer.music.play()
+                        except Exception as e:
+                            print(f"[WARN] 관전 오디오 재생 실패: {e}")
+
             # 레퍼런스 영상 프레임만 업데이트 (섹션 없이도 동작)
             if getattr(self, '_async_video_player', None) is not None:
                 vframe_rgb, vframe_seq = self._async_video_player.get_latest_frame_with_seq()
@@ -4286,9 +4302,9 @@ class GameEngine:
     def _on_multi_game_start(self):
         """CLIENT/SPECTATOR: HOST의 카운트다운 시작 신호 수신 — 백그라운드 스레드에서 호출."""
         if self._multi_role == "spectator":
-            # 관전자: 양쪽 플레이어 준비 완료 → 영상/음악 처음부터 다시 재생 (싱크 맞춤)
-            self._spectator_start_playback = True
-            print("[SPECTATOR] 양쪽 준비 완료 → 재생 위치 리셋 예약", flush=True)
+            # 관전자: GAME_START 수신 시각 기록 → 카운트다운(2초) 후 재생 시작
+            self._spectator_game_start_at = time.time()
+            print("[SPECTATOR] GAME_START 수신 → 카운트다운 후 재생 예정", flush=True)
             return
         self._multi_game_start_received = True
         print("[MULTI] 시작 신호 수신 → COUNTDOWN", flush=True)
@@ -4365,21 +4381,15 @@ class GameEngine:
             # PAUSED→PLAYING 복귀인 경우에만 세션 유지
             resuming_from_pause = getattr(self, '_prev_state', None) == GameState.PAUSED
 
-            # ── 관전 모드 진입: 에셋 로드 + 영상/음악 즉시 시작 ──
+            # ── 관전 모드 진입: 에셋만 로드, 영상/음악은 양쪽 준비 완료 후 시작 ──
             if self._multi_role == "spectator":
                 if not resuming_from_pause:
                     self._load_reference_assets()
                     self._ref_frame_landmarks = None
                     self._ref_video_frame = None
-                    if getattr(self, '_async_video_player', None) is not None:
-                        self._async_video_player.reset_position()
-                        self._async_video_player.start()
-                    if getattr(self, '_audio_path', None) and os.path.exists(self._audio_path):
-                        try:
-                            pygame.mixer.music.play()
-                        except Exception as e:
-                            print(f"[WARN] 관전 오디오 재생 실패: {e}")
-                    print("[SPECTATOR] 에셋 로드 + 영상/음악 재생 시작", flush=True)
+                    self._spectator_playback_started = False
+                    self._spectator_game_start_at = 0.0
+                    print("[SPECTATOR] 에셋 로드 완료 — 양쪽 준비 완료 대기 중", flush=True)
                 else:
                     pygame.mixer.music.unpause()
                 return   # 아래 일반 초기화 스킵
