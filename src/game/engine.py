@@ -174,8 +174,6 @@ class GameEngine:
         self._multi_opponent_pose_ready: bool = False  # 상대방 포즈 감지 3초 완료
         self._multi_mode_selected: bool = False        # 모드 선택 완료 여부
         self._multi_connected: bool = False            # Discovery 성공, 연결된 상태
-        self._multi_disconnected: bool = False         # 상대방 연결 끊김 알림 플래그
-        self._multi_disconnected_by_me: bool = False   # 내가 나간 경우 플래그
 
     def initialize(self):
         """
@@ -853,16 +851,7 @@ class GameEngine:
                 else:
                     self.transition_to(GameState.MENU)
             elif self.state in (GameState.READY, GameState.COUNTDOWN):
-                if self._is_multi_mode:
-                    self._multi_disconnected_by_me = True
-                    if self._multi_socket:
-                        try:
-                            self._multi_socket.stop()
-                        except Exception:
-                            pass
-                        self._multi_socket = None
-                else:
-                    self.transition_to(GameState.SONG_SELECT)
+                self.transition_to(GameState.SONG_SELECT)
             elif self.state == GameState.PAUSED:
                 self.transition_to(GameState.PLAYING)
             elif self.state in (GameState.PLAYING,):
@@ -938,13 +927,6 @@ class GameEngine:
                             if ch and ch.isprintable() and len(self._name_input_text) < 16:
                                 self._name_input_text += ch
                     continue  # 이름 입력 중엔 다른 키 처리 건너뜀
-
-                # 멀티플레이 종료 오버레이 활성 중: ENTER/ESC → OK 처리
-                if self._multi_disconnected or self._multi_disconnected_by_me:
-                    if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER,
-                                     pygame.K_SPACE, pygame.K_ESCAPE):
-                        self._on_button_press("btn_multi_disconnect_ok")
-                    continue  # 오버레이 중 다른 키 차단
 
                 # ESC → 뒤로가기
                 if event.key == pygame.K_ESCAPE:
@@ -1139,23 +1121,11 @@ class GameEngine:
         MOUSEMOTION으로 이미 hover된 버튼은 이미 focused 상태이므로
         마우스 클릭 시 즉시 실행된다.
         """
-        # 멀티플레이 종료 오버레이 활성 중: OK 버튼만 처리
-        if self._multi_disconnected or self._multi_disconnected_by_me:
-            ok_rect = self._btn_rects.get("btn_multi_disconnect_ok")
-            if ok_rect and ok_rect.collidepoint(pos):
-                self._on_button_press("btn_multi_disconnect_ok")
-            return
         double_tap_states = (GameState.MENU, GameState.SONG_SELECT, GameState.WAITING)
 
         for btn_name, rect in self._btn_rects.items():
             if not rect.collidepoint(pos):
                 continue
-
-            # WAITING의 cancel 버튼은 즉시 실행 (double tap 불필요)
-            if btn_name == "btn_waiting_cancel":
-                self._touch_focused_btn = ""
-                self._on_button_press(btn_name)
-                return
 
             if self.state in double_tap_states:
                 if self._touch_focused_btn != btn_name:
@@ -1314,35 +1284,9 @@ class GameEngine:
         elif btn_name == "btn_waiting_cancel":
             if self._multi_discovery:
                 self._multi_discovery.stop()
-            if self._multi_socket:
-                try:
-                    self._multi_socket.stop()
-                except Exception:
-                    pass
-                self._multi_socket = None
-            self._multi_disconnected_by_me = True
-        elif btn_name == "btn_multi_disconnect_ok":
-            # 멀티플레이 종료 오버레이 확인 → 멀티 상태 전체 초기화 후 MENU
-            self._multi_disconnected = False
-            self._multi_disconnected_by_me = False
             self._is_multi_mode = False
-            self._multi_connected = False
             self._multi_mode_selected = False
-            self._multi_socket = None
-            self._multi_role = ""
-            self._multi_opponent_ip = ""
-            self._multi_my_pose_ready = False
-            self._multi_opponent_pose_ready = False
-            self._multi_game_start_received = False
-            self._multi_found = False
-            self._multi_timed_out = False
-            self._multi_status_msg = ""
-            if self._multi_discovery:
-                try:
-                    self._multi_discovery.stop()
-                except Exception:
-                    pass
-                self._multi_discovery = None
+            self._multi_connected = False
             self.transition_to(GameState.MENU)
         elif btn_name == "btn_settings_vol_down":
             self._bgm_volume = max(0.0, round(self._bgm_volume - 0.1, 1))
@@ -1351,23 +1295,11 @@ class GameEngine:
             self._bgm_volume = min(1.0, round(self._bgm_volume + 0.1, 1))
             pygame.mixer.music.set_volume(self._bgm_volume)
         elif btn_name == "btn_countdown_cancel":
-            if self._is_multi_mode:
-                self._multi_disconnected_by_me = True
-            else:
-                self.transition_to(GameState.MENU)
+            self.transition_to(GameState.MENU)
         elif btn_name == "btn_ready_skip":
             self.transition_to(GameState.COUNTDOWN)
         elif btn_name == "btn_ready_cancel":
-            if self._is_multi_mode:
-                self._multi_disconnected_by_me = True
-                if self._multi_socket:
-                    try:
-                        self._multi_socket.stop()
-                    except Exception:
-                        pass
-                    self._multi_socket = None
-            else:
-                self.transition_to(GameState.MENU)
+            self.transition_to(GameState.MENU)
 
     def _update(self):
         """Update game state based on current state."""
@@ -1377,10 +1309,6 @@ class GameEngine:
         # 피드백 나이 타이머 (등장 후 경과시간, 애니메이션 progress용)
         if self._last_feedback is not None:
             self._feedback_age += 1.0 / self.TARGET_FPS
-
-        # 멀티플레이 연결 끊김 오버레이: 확인 버튼 누를 때까지 유지
-        if self._multi_disconnected or self._multi_disconnected_by_me:
-            return  # 게임 로직 정지, 렌더링은 계속됨
 
         if self.state == GameState.WAITING:
             self._update_waiting()
@@ -4394,7 +4322,6 @@ class GameEngine:
     def _on_multi_disconnect(self):
         """게임 중 연결 끊김 — 백그라운드 스레드에서 호출."""
         print("[MULTI] 상대방 연결 끊김", flush=True)
-        self._multi_disconnected = True
 
     def _on_multi_song_received(self, song_id: str, mode: str = "practice"):
         """CLIENT: HOST가 선택한 곡+모드를 수신 — 백그라운드 스레드에서 호출."""
