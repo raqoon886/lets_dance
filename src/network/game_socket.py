@@ -166,6 +166,9 @@ class GameSocket:
                         p["grade"] = str(msg.get("grade", ""))
                     elif mtype == MSG_SKELETON_UPDATE:
                         p["pose"] = msg.get("pose")
+                else:
+                    if mtype in (MSG_SCORE_UPDATE, MSG_SKELETON_UPDATE):
+                        print(f"[SPECTATOR] 무시: sender={sender_ip} not in players_state keys={list(self.players_state.keys())}", flush=True)
                 # MSG_SONG_SELECT는 발신자 무관하게 처리 (관전자도 곡 정보 수신 필요)
                 if mtype == MSG_SONG_SELECT:
                     song_id = str(msg.get("song_id", ""))

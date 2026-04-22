@@ -3184,18 +3184,28 @@ class GameEngine:
         # 스켈레톤: HOST=왼쪽 패널(파란색), CLIENT=오른쪽 패널(분홍색)
         if sock is not None:
             player_configs = [
-                (self._multi_host_ip,   (60, 180, 255), (180, 230, 255), (0, 0, skel_w, h)),
-                (self._multi_client_ip, (255, 80, 160),  (255, 180, 220), (w - skel_w, 0, skel_w, h)),
+                (self._multi_host_ip,   "HOST",   (60, 180, 255), (180, 230, 255), (0, 0, skel_w, h)),
+                (self._multi_client_ip, "CLIENT", (255, 80, 160),  (255, 180, 220), (w - skel_w, 0, skel_w, h)),
             ]
-            for player_ip, line_col, joint_col, panel_rect in player_configs:
+            for player_ip, tag, line_col, joint_col, panel_rect in player_configs:
+                if not player_ip:
+                    continue
                 state = sock.players_state.get(player_ip)
                 if state is None:
                     continue
                 pose = state.get("pose")
                 if pose is None:
+                    # 패널에 "대기 중" 표시
+                    px, py, pw, ph_p = panel_rect
+                    wait_lbl = self._fonts["small_retro"].render(f"{tag}", True, line_col)
+                    self._display.blit(wait_lbl, wait_lbl.get_rect(center=(px + pw // 2, h // 2 - 20)))
+                    wait_sub = self._fonts["small_retro"].render("waiting...", True, (100, 100, 130))
+                    self._display.blit(wait_sub, wait_sub.get_rect(center=(px + pw // 2, h // 2 + 10)))
                     continue
                 try:
                     lm = np.asarray(pose, dtype=np.float32)
+                    if lm.ndim == 1:
+                        lm = lm.reshape(-1, 4)
                     if lm.shape != (33, 4):
                         continue
                 except Exception:
