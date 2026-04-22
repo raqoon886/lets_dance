@@ -12,8 +12,8 @@ from .protocol import (
     GAME_PORT,
 )
 
-HEARTBEAT_INTERVAL = 1.0   # seconds between heartbeats
-TIMEOUT_SEC        = 5.0   # seconds of silence before marking disconnected
+HEARTBEAT_INTERVAL = 0.5   # seconds between heartbeats
+TIMEOUT_SEC        = 2.0   # seconds of silence before marking disconnected
 
 
 class GameSocket:

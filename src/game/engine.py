@@ -1314,21 +1314,35 @@ class GameEngine:
         elif btn_name == "btn_waiting_cancel":
             if self._multi_discovery:
                 self._multi_discovery.stop()
-            self._is_multi_mode = False
-            self._multi_mode_selected = False
-            self._multi_connected = False
-            self.transition_to(GameState.MENU)
+            if self._multi_socket:
+                try:
+                    self._multi_socket.stop()
+                except Exception:
+                    pass
+                self._multi_socket = None
+            self._multi_disconnected_by_me = True
         elif btn_name == "btn_multi_disconnect_ok":
-            # 멀티플레이 종료 오버레이 확인 → 멀티 상태 초기화 후 MENU
+            # 멀티플레이 종료 오버레이 확인 → 멀티 상태 전체 초기화 후 MENU
             self._multi_disconnected = False
             self._multi_disconnected_by_me = False
             self._is_multi_mode = False
             self._multi_connected = False
+            self._multi_mode_selected = False
             self._multi_socket = None
             self._multi_role = ""
             self._multi_opponent_ip = ""
             self._multi_my_pose_ready = False
             self._multi_opponent_pose_ready = False
+            self._multi_game_start_received = False
+            self._multi_found = False
+            self._multi_timed_out = False
+            self._multi_status_msg = ""
+            if self._multi_discovery:
+                try:
+                    self._multi_discovery.stop()
+                except Exception:
+                    pass
+                self._multi_discovery = None
             self.transition_to(GameState.MENU)
         elif btn_name == "btn_settings_vol_down":
             self._bgm_volume = max(0.0, round(self._bgm_volume - 0.1, 1))
