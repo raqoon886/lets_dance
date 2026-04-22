@@ -142,7 +142,7 @@ class GameSocket:
                         self.on_disconnect()
 
             try:
-                data, _ = self._sock.recvfrom(2048)
+                data, addr = self._sock.recvfrom(2048)
             except socket.timeout:
                 continue
             except OSError:
