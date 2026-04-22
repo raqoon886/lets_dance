@@ -180,6 +180,7 @@ class GameEngine:
         self._spectator_start_playback: bool = False   # 관전자: 양쪽 준비 완료 후 재생 시작 신호
         self._spectator_game_start_at: float = 0.0    # 관전자: GAME_START 수신 시각
         self._spectator_playback_started: bool = False # 관전자: 영상/음악 재생 시작 여부
+        self._spectator_countdown_active: bool = False # 관전자: 카운트다운 표시 중
 
     def initialize(self):
         """
@@ -1669,8 +1670,23 @@ class GameEngine:
                 self._spectator_reload_assets = False
                 self._spectator_playback_started = False
                 self._spectator_game_start_at = 0.0
-                self._ref_landmarks = None  # 이전 곡 캐시 초기화 → 재로드 강제
+                self._spectator_countdown_active = False
+                # 이전 곡의 영상/음악 정지 및 에셋 해제
+                if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
+                    pygame.mixer.music.stop()
+                self._release_reference_assets()
+                # players_state 초기화 (이전 판 점수/스켈레톤 잔상 제거)
+                if self._multi_socket is not None:
+                    for ip in self._multi_socket.players_state:
+                        self._multi_socket.players_state[ip] = {
+                            "score": 0, "combo": 0, "grade": "", "pose": None
+                        }
                 self._load_reference_assets()
+                print("[SPECTATOR] 새 라운드 에셋 재로드 완료", flush=True)
+
+            # 카운트다운 활성화 (GAME_START 수신 시)
+            if not self._spectator_countdown_active and self._spectator_game_start_at > 0:
+                self._spectator_countdown_active = True
 
             # 영상/음악 재생 시작 조건 판단
             if not self._spectator_playback_started:
@@ -1680,14 +1696,16 @@ class GameEngine:
                 if self._spectator_game_start_at > 0:
                     if time.time() - self._spectator_game_start_at >= COUNTDOWN_DELAY:
                         should_start = True
+                        self._spectator_countdown_active = False
                         print("[SPECTATOR] GAME_START + 카운트다운 완료 → 재생 시작", flush=True)
 
-                # 조건 2 (fallback): GAME_START 못 받았지만 플레이어가 이미 플레이 중
+                # 조건 2 (fallback): GAME_START 못 받았지만 점수가 올라감 (새 라운드 확인)
                 if not should_start and self._multi_socket is not None:
                     for ps in self._multi_socket.players_state.values():
-                        if ps.get("score", 0) > 0 or ps.get("pose") is not None:
+                        if ps.get("score", 0) > 0:
                             should_start = True
-                            print("[SPECTATOR] 플레이어 스코어/스켈레톤 감지 → 재생 시작 (fallback)", flush=True)
+                            self._spectator_countdown_active = False
+                            print("[SPECTATOR] 플레이어 스코어 감지 → 재생 시작 (fallback)", flush=True)
                             break
 
                 if should_start:
@@ -3292,6 +3310,24 @@ class GameEngine:
         spec_lbl = self._fonts["small_retro"].render("SPECTATING", True, spec_col)
         self._display.blit(spec_lbl, spec_lbl.get_rect(center=(w // 2, PANEL_Y + PANEL_H // 2)))
 
+        # ── 카운트다운 오버레이 (3 → 2 → 1 → 시작!) ──
+        if self._spectator_countdown_active and self._spectator_game_start_at > 0:
+            elapsed = time.time() - self._spectator_game_start_at
+            COUNTDOWN_DELAY = 3.0
+            remaining = COUNTDOWN_DELAY - elapsed
+            if remaining > 0:
+                # 반투명 어두운 오버레이
+                overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+                overlay.fill((0, 0, 0, 160))
+                self._display.blit(overlay, (0, 0))
+                # 카운트다운 숫자
+                count_num = int(remaining) + 1  # 3, 2, 1
+                count_num = min(count_num, 3)
+                count_txt = self._fonts["countdown"].render(str(count_num), True, (0, 255, 255))
+                self._display.blit(count_txt, count_txt.get_rect(center=(w // 2, h // 2)))
+                sub = self._fonts["result_big"].render("GET READY!", True, (180, 180, 220))
+                self._display.blit(sub, sub.get_rect(center=(w // 2, h // 2 + 100)))
+
     def _render_opponent_score_overlay(self, w, h, header_h, footer_y):
         """게임 화면 오른쪽 하단 구석에 상대방 점수를 작은 패널로 표시.
 
@@ -4470,6 +4506,7 @@ class GameEngine:
                     self._ref_video_frame = None
                     self._spectator_playback_started = False
                     self._spectator_game_start_at = 0.0
+                    self._spectator_countdown_active = False
                     print("[SPECTATOR] 에셋 로드 완료 — 양쪽 준비 완료 대기 중", flush=True)
                 else:
                     pygame.mixer.music.unpause()
