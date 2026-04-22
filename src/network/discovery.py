@@ -21,8 +21,10 @@ class Discovery:
     """Discover an opponent via UDP broadcast."""
 
     def __init__(self):
-        self.role: str = ""            # "host" | "client"
+        self.role: str = ""            # "host" | "client" | "spectator"
         self.opponent_ip: str = ""
+        self.host_ip: str = ""
+        self.client_ip: str = ""
         self._stop = threading.Event()
 
     def find_opponent(self, on_found, on_timeout, on_status=None):
@@ -45,6 +47,16 @@ class Discovery:
     def stop(self):
         """Cancel ongoing discovery."""
         self._stop.set()
+
+    def start_host_listener(self, client_ip: str):
+        """Host keeps listening for spectators after game starts."""
+        self._stop.clear()
+        t = threading.Thread(
+            target=self._host_listener_run,
+            args=(client_ip,),
+            daemon=True,
+        )
+        t.start()
 
     # ─── internal ────────────────────────────────────────────────────────────
 
@@ -112,12 +124,21 @@ class Discovery:
                 return
 
             elif mtype == MSG_ACK:
-                # Host confirmed us → we are CLIENT
-                self.role = "client"
-                self.opponent_ip = addr[0]
-                sock.close()
-                on_found("client", addr[0])
-                return
+                role = msg.get("role", "client")
+                if role == "spectator":
+                    self.role = "spectator"
+                    self.host_ip = msg.get("host_ip", "")
+                    self.client_ip = msg.get("client_ip", "")
+                    sock.close()
+                    on_found("spectator", f"{self.host_ip},{self.client_ip}")
+                    return
+                else:
+                    # Host confirmed us → we are CLIENT
+                    self.role = "client"
+                    self.opponent_ip = addr[0]
+                    sock.close()
+                    on_found("client", addr[0])
+                    return
 
         sock.close()
 
@@ -135,3 +156,41 @@ class Discovery:
         except Exception:
             pass
         return ips
+
+    def _get_main_ip(self) -> str:
+        ips = self._get_own_ips()
+        ips.discard("127.0.0.1")
+        ips.discard("::1")
+        return list(ips)[0] if ips else "127.0.0.1"
+
+    def _host_listener_run(self, client_ip: str):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("", DISCOVERY_PORT))
+        except OSError:
+            return
+
+        sock.settimeout(1.0)
+        own_ips = self._get_own_ips()
+        main_ip = self._get_main_ip()
+
+        while not self._stop.is_set():
+            try:
+                data, addr = sock.recvfrom(1024)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+
+            msg = parse_msg(data)
+            if msg.get("type") == MSG_HELLO:
+                opponent_ip = addr[0]
+                if opponent_ip in own_ips or opponent_ip == client_ip:
+                    continue
+                # 3rd board! Send them spectator ACK.
+                try:
+                    sock.sendto(make_msg(MSG_ACK, role="spectator", host_ip=main_ip, client_ip=client_ip), addr)
+                except OSError:
+                    pass
+        sock.close()
