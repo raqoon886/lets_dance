@@ -8,12 +8,12 @@ import time
 from .protocol import (
     make_msg, parse_msg,
     MSG_SCORE_UPDATE, MSG_GAME_END, MSG_DISCONNECT, MSG_HEARTBEAT,
-    MSG_SONG_SELECT, MSG_GAME_START, MSG_POSE_READY,
+    MSG_SONG_SELECT, MSG_GAME_START, MSG_POSE_READY, MSG_SKELETON_UPDATE,
     GAME_PORT,
 )
 
-HEARTBEAT_INTERVAL = 0.5   # seconds between heartbeats
-TIMEOUT_SEC        = 2.0   # seconds of silence before marking disconnected
+HEARTBEAT_INTERVAL = 1.0   # seconds between heartbeats
+TIMEOUT_SEC        = 5.0   # seconds of silence before marking disconnected
 
 
 class GameSocket:
@@ -23,11 +23,15 @@ class GameSocket:
     Thread-safe for read access to opponent_* attributes.
     """
 
-    def __init__(self, opponent_ip: str):
+    def __init__(self, opponent_ip: str, role: str = "player", host_ip: str = "", client_ip: str = ""):
         self.opponent_ip = opponent_ip
+        self.role = role
+        self.host_ip = host_ip
+        self.client_ip = client_ip
 
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self._sock.bind(("", GAME_PORT))
         self._sock.settimeout(0.05)
 
@@ -43,6 +47,12 @@ class GameSocket:
         self.opponent_connected: bool = False
         self.opponent_finished: bool  = False
         self.opponent_final_score: int = 0
+
+        # Spectator states
+        self.players_state = {
+            self.host_ip: {"score": 0, "combo": 0, "grade": "", "pose": None},
+            self.client_ip: {"score": 0, "combo": 0, "grade": "", "pose": None}
+        }
 
         # optional callbacks (called from recv thread)
         self.on_disconnect = None
@@ -93,6 +103,10 @@ class GameSocket:
         """Send current score snapshot to opponent."""
         self._send(make_msg(MSG_SCORE_UPDATE, score=score, combo=combo, grade=grade))
 
+    def send_skeleton(self, pose_data: list):
+        """Send skeleton metadata to spectators."""
+        self._send(make_msg(MSG_SKELETON_UPDATE, pose=pose_data))
+
     def send_end(self, final_score: int):
         """Notify opponent that this side has finished."""
         self._send(make_msg(MSG_GAME_END, final_score=final_score))
@@ -101,7 +115,13 @@ class GameSocket:
 
     def _send(self, data: bytes):
         try:
-            self._sock.sendto(data, (self.opponent_ip, GAME_PORT))
+            if self.opponent_ip:
+                self._sock.sendto(data, (self.opponent_ip, GAME_PORT))
+        except OSError:
+            pass
+        # Also broadcast for spectators
+        try:
+            self._sock.sendto(data, ("255.255.255.255", GAME_PORT))
         except OSError:
             pass
 
@@ -122,7 +142,7 @@ class GameSocket:
                         self.on_disconnect()
 
             try:
-                data, _ = self._sock.recvfrom(2048)
+                data, addr = self._sock.recvfrom(4096)
             except socket.timeout:
                 continue
             except OSError:
@@ -134,6 +154,47 @@ class GameSocket:
 
             msg = parse_msg(data)
             mtype = msg.get("type")
+            sender_ip = addr[0].strip()
+
+            if self.role == "spectator":
+                # 수신 데이터 디버깅 (매 5초 1회)
+                import time as _time
+                _now = _time.time()
+                if not hasattr(self, '_last_spec_debug'):
+                    self._last_spec_debug = 0
+                if _now - self._last_spec_debug > 5.0:
+                    self._last_spec_debug = _now
+                    print(f"[SPECTATOR-DBG] sender={sender_ip} type={mtype} "
+                          f"keys={list(self.players_state.keys())} "
+                          f"host_pose={'Y' if self.players_state.get(self.host_ip, {}).get('pose') else 'N'} "
+                          f"client_pose={'Y' if self.players_state.get(self.client_ip, {}).get('pose') else 'N'}",
+                          flush=True)
+                # Check if this IP is one of our tracked players
+                if sender_ip in self.players_state:
+                    p = self.players_state[sender_ip]
+                    if mtype == MSG_SCORE_UPDATE:
+                        p["score"] = int(msg.get("score", 0))
+                        p["combo"] = int(msg.get("combo", 0))
+                        p["grade"] = str(msg.get("grade", ""))
+                    elif mtype == MSG_SKELETON_UPDATE:
+                        p["pose"] = msg.get("pose")
+                else:
+                    if mtype in (MSG_SCORE_UPDATE, MSG_SKELETON_UPDATE):
+                        print(f"[SPECTATOR] 무시: sender={sender_ip} not in players_state keys={list(self.players_state.keys())}", flush=True)
+                # MSG_SONG_SELECT는 발신자 무관하게 처리 (관전자도 곡 정보 수신 필요)
+                if mtype == MSG_SONG_SELECT:
+                    song_id = str(msg.get("song_id", ""))
+                    mode    = str(msg.get("mode", "practice"))
+                    if song_id and self.on_song_select:
+                        self.on_song_select(song_id, mode)
+                # MSG_GAME_START: 양쪽 플레이어 준비 완료 → 관전자 영상 재생 시작
+                elif mtype == MSG_GAME_START:
+                    if self.on_game_start:
+                        self.on_game_start()
+                continue
+
+            if sender_ip != self.opponent_ip:
+                continue
 
             if mtype == MSG_SCORE_UPDATE:
                 self.opponent_score = int(msg.get("score", 0))

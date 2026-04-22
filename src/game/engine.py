@@ -162,9 +162,11 @@ class GameEngine:
 
         # ── 멀티플레이 ───────────────────────────────────────────────
         self._is_multi_mode: bool = False       # 현재 멀티 게임 중 여부
-        self._multi_role: str = ""              # "host" | "client"
+        self._multi_role: str = ""              # "host" | "client" | "spectator"
         self._multi_opponent_ip: str = ""
-        self._multi_discovery = None            # Discovery 인스턴스
+        self._multi_host_ip: str = ""           # spectator: HOST IP
+        self._multi_client_ip: str = ""         # spectator: CLIENT IP
+        self._multi_discovery = None            # Discovery 인스턴스 (host listener 포함)
         self._multi_socket = None               # GameSocket 인스턴스
         self._multi_status_msg: str = ""        # WAITING 화면 상태 메시지
         self._multi_found: bool = False         # 탐색 성공 여부 (WAITING → SONG_SELECT)
@@ -174,6 +176,10 @@ class GameEngine:
         self._multi_opponent_pose_ready: bool = False  # 상대방 포즈 감지 3초 완료
         self._multi_mode_selected: bool = False        # 모드 선택 완료 여부
         self._multi_connected: bool = False            # Discovery 성공, 연결된 상태
+        self._spectator_reload_assets: bool = False    # 관전자: 곡 수신 후 에셋 재로드 신호
+        self._spectator_start_playback: bool = False   # 관전자: 양쪽 준비 완료 후 재생 시작 신호
+        self._spectator_game_start_at: float = 0.0    # 관전자: GAME_START 수신 시각
+        self._spectator_playback_started: bool = False # 관전자: 영상/음악 재생 시작 여부
 
     def initialize(self):
         """
@@ -855,7 +861,11 @@ class GameEngine:
             elif self.state == GameState.PAUSED:
                 self.transition_to(GameState.PLAYING)
             elif self.state in (GameState.PLAYING,):
-                self.transition_to(GameState.PAUSED)
+                if self._multi_role == "spectator":
+                    # 관전 모드에서는 즉시 메뉴로
+                    self.transition_to(GameState.MENU)
+                else:
+                    self.transition_to(GameState.PAUSED)
             elif self.state == GameState.RESULT:
                 if self._name_input_active:
                     # 이름 입력 오버레이 활성 중: ESC = 이전 이름으로 저장
@@ -1203,6 +1213,10 @@ class GameEngine:
         elif btn_name == "btn_song_back":
             self.transition_to(GameState.MENU)
         elif btn_name == "btn_song_start":
+            # 멀티플레이 CLIENT는 HOST의 곡 선택을 기다려야 함 → 독립 START 차단
+            if self._is_multi_mode and self._multi_role == "client":
+                print("[MULTI] CLIENT: HOST의 곡 선택을 기다리는 중 (독립 START 차단)", flush=True)
+                return
             songs = self._songs_for_mode(self._current_mode)
             if songs:
                 self._current_song = songs[self._selected_song_idx]
@@ -1309,6 +1323,17 @@ class GameEngine:
         # 피드백 나이 타이머 (등장 후 경과시간, 애니메이션 progress용)
         if self._last_feedback is not None:
             self._feedback_age += 1.0 / self.TARGET_FPS
+
+        # ── 멀티플레이 CLIENT: HOST 곡 선택 신호를 상태에 무관하게 처리 ──
+        # WAITING이 아닌 상태(RESULT, SONG_SELECT 등)에서도 새 곡 수신 시 READY로 전환
+        if (self._is_multi_mode
+                and self._multi_role == "client"
+                and self._multi_found
+                and self.state not in (GameState.WAITING, GameState.PLAYING, GameState.COUNTDOWN)):
+            self._multi_found = False
+            if self._current_song:
+                print(f"[MULTI] CLIENT: 새 곡 수신 → READY ({self._current_song.get('id')})", flush=True)
+                self.transition_to(GameState.READY)
 
         if self.state == GameState.WAITING:
             self._update_waiting()
@@ -1436,7 +1461,7 @@ class GameEngine:
         import numpy as np
 
         arr = np.asarray(landmarks, dtype=np.float32)
-        return np.round(arr, 6).tolist()
+        return np.round(arr, 3).tolist()
 
     def _open_score_trace_log(self):
         if not self._score_trace_enabled:
@@ -1630,6 +1655,57 @@ class GameEngine:
     def _update_gameplay(self):
         """Fetch async frame and compute score."""
 
+        # 관전 모드에서는 카메라/추론 루프 완전 우회
+        if self._multi_role == "spectator":
+            COUNTDOWN_DELAY = 3.0  # 카운트다운 대기 시간 (플레이어 3→2→1과 동기화)
+
+            # 관전자 곡 수신 후 레퍼런스 에셋 로드 (메인 스레드에서 안전하게 1회 처리)
+            if self._spectator_reload_assets:
+                self._spectator_reload_assets = False
+                self._spectator_playback_started = False
+                self._spectator_game_start_at = 0.0
+                self._ref_landmarks = None  # 이전 곡 캐시 초기화 → 재로드 강제
+                self._load_reference_assets()
+
+            # 영상/음악 재생 시작 조건 판단
+            if not self._spectator_playback_started:
+                should_start = False
+
+                # 조건 1: GAME_START 수신 + 카운트다운 경과
+                if self._spectator_game_start_at > 0:
+                    if time.time() - self._spectator_game_start_at >= COUNTDOWN_DELAY:
+                        should_start = True
+                        print("[SPECTATOR] GAME_START + 카운트다운 완료 → 재생 시작", flush=True)
+
+                # 조건 2 (fallback): GAME_START 못 받았지만 플레이어가 이미 플레이 중
+                if not should_start and self._multi_socket is not None:
+                    for ps in self._multi_socket.players_state.values():
+                        if ps.get("score", 0) > 0 or ps.get("pose") is not None:
+                            should_start = True
+                            print("[SPECTATOR] 플레이어 스코어/스켈레톤 감지 → 재생 시작 (fallback)", flush=True)
+                            break
+
+                if should_start:
+                    self._spectator_playback_started = True
+                    if getattr(self, '_async_video_player', None) is not None:
+                        self._async_video_player.reset_position()
+                        self._async_video_player.start()
+                    if getattr(self, '_audio_path', None) and os.path.exists(self._audio_path):
+                        try:
+                            pygame.mixer.music.play()
+                        except Exception as e:
+                            print(f"[WARN] 관전 오디오 재생 실패: {e}")
+
+            # 레퍼런스 영상 프레임만 업데이트 (섹션 없이도 동작)
+            if getattr(self, '_async_video_player', None) is not None:
+                vframe_rgb, vframe_seq = self._async_video_player.get_latest_frame_with_seq()
+                if vframe_rgb is not None and vframe_seq != self._ref_video_frame_seq:
+                    self._ref_video_frame_seq = vframe_seq
+                    th, tw = vframe_rgb.shape[:2]
+                    self._ref_video_surf = pygame.image.frombuffer(
+                        vframe_rgb.tobytes(), (tw, th), "RGB")
+            return
+
         if getattr(self, '_async_camera', None) is None:
             return
 
@@ -1804,7 +1880,7 @@ class GameEngine:
                 self._result_data = self._scorer.get_final_result()
                 self.transition_to(GameState.RESULT)
 
-        # ── 멀티플레이: 점수 전송 (판정 주기와 동기화) ────────────
+        # ── 멀티플레이: 점수 + 스켈레톤 전송 (판정 주기와 동기화) ────────────
         if self._is_multi_mode and self._multi_socket and self._current_session:
             if self._scoring_frame_counter == 0:   # 판정 직후
                 self._multi_socket.send_score(
@@ -1812,17 +1888,28 @@ class GameEngine:
                     combo=int(self._scorer.combo),
                     grade=str(self._last_feedback.get("text", "") if self._last_feedback else ""),
                 )
+                # 스켈레톤 메타데이터 전송 (관전자용)
+                if scoring_landmarks is not None:
+                    pose_list = self._landmarks_to_list(scoring_landmarks)
+                    if pose_list is not None:
+                        self._multi_socket.send_skeleton(pose_list)
 
     def _update_waiting(self):
-        """WAITING 상태 처리 — HOST는 연결 후 모드/곡 선택, CLIENT는 곡 수신 후 READY 이동."""
+        """WAITING 상태 처리 — HOST는 연결 후 모드/곡 선택, CLIENT는 곡 수신 후 READY 이동,
+        SPECTATOR는 곡 수신 후 PLAYING(관전) 진입."""
         if self._multi_found:
-            self._multi_found = False
-            if self._multi_role == "host":
-                # HOST: _multi_connected=True → 렌더링에서 모드 선택 UI 표시
-                pass
-            else:
-                # CLIENT: 곡을 수신했으면 READY로, 아직이면 계속 대기
+            if self._multi_role == "spectator":
+                # SPECTATOR: 곡 정보가 도착했을 때만 PLAYING 진입
                 if self._current_song:
+                    self._multi_found = False
+                    self.transition_to(GameState.PLAYING)
+            elif self._multi_role == "host":
+                # HOST: _multi_connected=True → 렌더링에서 모드 선택 UI 표시
+                self._multi_found = False
+            else:
+                # CLIENT: 곡을 수신했으면 READY로
+                if self._current_song:
+                    self._multi_found = False
                     self.transition_to(GameState.READY)
 
     def _render(self):
@@ -1832,14 +1919,6 @@ class GameEngine:
         self._btn_rects.clear()
 
         w, h = self._display.get_size()
-
-        # 멀티플레이 종료 오버레이 — 최우선 렌더링 (다른 화면 위에 덮어씀)
-        if self._multi_disconnected or self._multi_disconnected_by_me:
-            # 배경은 직전 프레임 유지 (아무것도 안 그리거나, 단색 배경)
-            self._display.fill((6, 4, 18))
-            self._render_multi_disconnect_overlay(w, h)
-            pygame.display.flip()
-            return
 
         if self.state == GameState.MENU:
             self._render_menu(w, h)
@@ -1888,67 +1967,7 @@ class GameEngine:
         pygame.draw.rect(self._display, col, pygame.Rect(bx, by, bw, bh), 1, border_radius=6)
         self._display.blit(surf, (bx + 8, by + 4))
 
-    def _render_multi_disconnect_overlay(self, w, h):
-        """멀티플레이 연결 종료 오버레이 (전체 화면 반투명)."""
-        import math
-        tick = self._neon_tick
-
-        # 반투명 배경
-        overlay = pygame.Surface((w, h), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 200))
-        self._display.blit(overlay, (0, 0))
-
-        box_w, box_h = min(520, w - 40), 260
-        bx = w // 2 - box_w // 2
-        by = h // 2 - box_h // 2
-
-        # 박스 배경
-        box_surf = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
-        box_surf.fill((18, 8, 38, 240))
-        self._display.blit(box_surf, (bx, by))
-
-        if self._multi_disconnected_by_me:
-            title_col = self._neon_color((255, 160, 60), tick)
-            title_txt = "MULTI PLAY ENDED"
-            body_txt  = "You have left the multiplayer session."
-        else:
-            title_col = self._neon_color((255, 60, 100), tick)
-            title_txt = "CONNECTION LOST"
-            body_txt  = "Opponent disconnected from the session."
-
-        # 테두리 네온 글로우
-        self._draw_neon_rect(self._display, pygame.Rect(bx, by, box_w, box_h),
-                             title_col, width=2, radius=14, glow_radius=12)
-
-        # 아이콘 (깜빡이는 !)
-        icon_alpha = int(180 + 75 * math.sin(tick * 4))
-        icon_col = tuple(min(255, int(c * icon_alpha / 255)) for c in title_col)
-        icon_surf = self._fonts["feedback"].render("!", True, icon_col)
-        self._display.blit(icon_surf, icon_surf.get_rect(center=(w // 2, by + 72)))
-
-        # 타이틀
-        t_surf = self._fonts["result_big"].render(title_txt, True, title_col)
-        self._display.blit(t_surf, t_surf.get_rect(center=(w // 2, by + 130)))
-
-        # 설명
-        b_surf = self._fonts["body"].render(body_txt, True, (200, 190, 220))
-        self._display.blit(b_surf, b_surf.get_rect(center=(w // 2, by + 165)))
-
-        # 확인 버튼
-        btn_rect = pygame.Rect(w // 2 - 90, by + box_h - 58, 180, 42)
-        hover = btn_rect.collidepoint(pygame.mouse.get_pos())
-        pygame.draw.rect(self._display, (60, 20, 80) if hover else (35, 10, 55),
-                         btn_rect, border_radius=10)
-        self._draw_neon_rect(self._display, btn_rect,
-                             self._neon_color((200, 80, 255), tick) if hover else (120, 50, 160),
-                             width=2, radius=10, glow_radius=6)
-        ok_lbl = self._fonts["small_retro"].render("OK", True, (255, 255, 255))
-        self._display.blit(ok_lbl, ok_lbl.get_rect(center=btn_rect.center))
-        self._btn_rects["btn_multi_disconnect_ok"] = btn_rect
-
-        # 힌트
-        hint = self._fonts["small_retro"].render("Press ENTER or click OK", True, (80, 70, 100))
-        self._display.blit(hint, hint.get_rect(center=(w // 2, by + box_h + 14)))
+    def _render_waiting(self, w, h):
         """MULTI PLAY 상대방 탐색 중 화면."""
         import math
         tick = self._neon_tick
@@ -1985,20 +2004,20 @@ class GameEngine:
             msg_surf = self._fonts["body"].render(msg, True, msg_col)
             self._display.blit(msg_surf, msg_surf.get_rect(center=(w // 2, cy + 50)))
 
-            cancel_rect = pygame.Rect(w // 2 - 100, h - 64, 200, 48)
+            cancel_rect = pygame.Rect(w // 2 - 100, h // 2 + 100, 200, 44)
             self._btn_rects["btn_waiting_cancel"] = cancel_rect
             hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
-            focused_cancel = (self._touch_focused_btn == "btn_waiting_cancel")
-            active_c = hover or focused_cancel
-            pygame.draw.rect(self._display, (80, 20, 20) if active_c else (30, 10, 10),
+            pygame.draw.rect(self._display, (80, 20, 20) if hover else (30, 10, 10),
                              cancel_rect, border_radius=10)
             self._draw_neon_rect(self._display, cancel_rect,
-                                 self._neon_color((255, 80, 80), tick) if active_c else (120, 40, 40),
+                                 self._neon_color((255, 80, 80), tick) if hover else (120, 40, 40),
                                  width=2, radius=10, glow_radius=6)
             cancel_lbl = self._fonts["small_retro"].render("CANCEL", True, (255, 255, 255))
             self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
-            hint_surf = self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100))
-            self._display.blit(hint_surf, hint_surf.get_rect(center=(w // 2, h - 14)))
+            self._display.blit(
+                self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100)),
+                self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100)).get_rect(center=(w // 2, h - 24))
+            )
             return
 
         # ── 단계 2: HOST 연결됨 — 모드 선택 ──────────────────────
@@ -2084,8 +2103,8 @@ class GameEngine:
                 self._display.blit(icon_surf, icon_surf.get_rect(midleft=(base_lx, cy_btn)))
                 self._display.blit(lbl_surf,  lbl_surf.get_rect(midleft=(base_lx + icon_surf.get_width() + 16, cy_btn)))
 
-            # CANCEL 버튼 (하단 고정, 충분한 크기)
-            cancel_rect = pygame.Rect(w // 2 - 100, h - 64, 200, 48)
+            # CANCEL 버튼
+            cancel_rect = pygame.Rect(w // 2 - 80, h - 52, 160, 34)
             self._btn_rects["btn_waiting_cancel"] = cancel_rect
             focused_c = (focus_list[focus_idx] == "btn_waiting_cancel")
             hover_c   = cancel_rect.collidepoint(pygame.mouse.get_pos())
@@ -2094,7 +2113,7 @@ class GameEngine:
                              cancel_rect, border_radius=10)
             pygame.draw.rect(self._display,
                              self._neon_color((255, 80, 80), tick) if active_c else (120, 40, 40),
-                             cancel_rect, 3 if focused_c else 2, border_radius=10)
+                             cancel_rect, 2 if not focused_c else 3, border_radius=10)
             cancel_lbl = self._fonts["small_retro"].render("< CANCEL", True,
                                                             (255, 200, 200) if active_c else (180, 120, 120))
             self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
@@ -2126,195 +2145,20 @@ class GameEngine:
             f"연결됨: {self._multi_opponent_ip}", True, (100, 180, 120))
         self._display.blit(ip_surf, ip_surf.get_rect(center=(w // 2, cy + 50)))
 
-        # CANCEL 버튼 (하단 고정)
-        cancel_rect = pygame.Rect(w // 2 - 100, h - 64, 200, 48)
+        # CANCEL 버튼
+        cancel_rect = pygame.Rect(w // 2 - 100, h // 2 + 120, 200, 44)
         self._btn_rects["btn_waiting_cancel"] = cancel_rect
         hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
-        focused_cancel = (self._touch_focused_btn == "btn_waiting_cancel")
-        active_c = hover or focused_cancel
-        bg = (80, 20, 20) if active_c else (30, 10, 10)
+        bg = (80, 20, 20) if hover else (30, 10, 10)
         pygame.draw.rect(self._display, bg, cancel_rect, border_radius=10)
-        border_col = self._neon_color((255, 80, 80), tick) if active_c else (120, 40, 40)
+        border_col = self._neon_color((255, 80, 80), tick) if hover else (120, 40, 40)
         self._draw_neon_rect(self._display, cancel_rect, border_col, width=2, radius=10, glow_radius=6)
         cancel_lbl = self._fonts["small_retro"].render("CANCEL", True, (255, 255, 255))
         self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
 
         hint_col = (80, 70, 100)
         hint = self._fonts["small_retro"].render("ESC: CANCEL", True, hint_col)
-        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 14)))
-
-    def _render_waiting(self, w, h):
-        """MULTI PLAY 상대방 탐색 중 화면."""
-        import math
-        tick = self._neon_tick
-
-        # 배경
-        self._display.fill((6, 4, 18))
-        for y in range(h):
-            t = y / h
-            pygame.draw.line(self._display, (int(18+10*t), int(4+4*t), int(40+15*t)), (0, y), (w, y))
-
-        # 타이틀
-        title_col = self._neon_color((255, 80, 160), tick)
-        title_surf = self._fonts["result_big"].render("MULTIPLAY", True, title_col)
-        self._display.blit(title_surf, title_surf.get_rect(center=(w // 2, 44)))
-
-        pygame.draw.line(self._display, self._neon_color((180, 40, 100), tick, 0.6),
-                         (w // 4, 64), (w * 3 // 4, 64), 1)
-
-        # ── 단계 1: 탐색 중 (아직 연결 안 됨) ─────────────────────
-        if not self._multi_connected:
-            cx, cy = w // 2, h // 2 - 20
-            r_spin = 36
-            num_dots = 10
-            for i in range(num_dots):
-                angle = math.radians(i * (360 / num_dots) + tick * 180)
-                dx2 = int(cx + r_spin * math.cos(angle))
-                dy2 = int(cy + r_spin * math.sin(angle))
-                alpha = int(60 + 195 * (i / num_dots))
-                col_d = (int(255 * alpha / 255), int(80 * alpha / 255), int(180 * alpha / 255))
-                pygame.draw.circle(self._display, col_d, (dx2, dy2), 5)
-
-            msg = self._multi_status_msg or "상대방 탐색 중..."
-            msg_col = (255, 80, 80) if self._multi_timed_out else (220, 220, 255)
-            msg_surf = self._fonts["body"].render(msg, True, msg_col)
-            self._display.blit(msg_surf, msg_surf.get_rect(center=(w // 2, cy + 50)))
-
-            cancel_rect = pygame.Rect(w // 2 - 120, h - 80, 240, 56)
-            self._btn_rects["btn_waiting_cancel"] = cancel_rect
-            hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
-            pygame.draw.rect(self._display, (80, 20, 20) if hover else (30, 10, 10),
-                             cancel_rect, border_radius=10)
-            self._draw_neon_rect(self._display, cancel_rect,
-                                 self._neon_color((255, 80, 80), tick) if hover else (120, 40, 40),
-                                 width=2, radius=10, glow_radius=6)
-            cancel_lbl = self._fonts["small_retro"].render("CANCEL", True, (255, 255, 255))
-            self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
-            hint_surf = self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100))
-            self._display.blit(hint_surf, hint_surf.get_rect(center=(w // 2, h - 16)))
-            return
-
-        # ── 단계 2: HOST 연결됨 — 모드 선택 ──────────────────────
-        if self._multi_role == "host" and not self._multi_mode_selected:
-            sm_col  = self._neon_color((200, 140, 255), tick)
-            sm_glow = self._fonts["result_big"].render("-- SELECT MODE --", True, (60, 20, 80))
-            sm_surf = self._fonts["result_big"].render("-- SELECT MODE --", True, sm_col)
-            SM_Y = 84
-            for dx, dy in [(-2,0),(2,0),(0,-2),(0,2)]:
-                self._display.blit(sm_glow, sm_glow.get_rect(center=(w//2+dx, SM_Y+dy)))
-            self._display.blit(sm_surf, sm_surf.get_rect(center=(w // 2, SM_Y)))
-            pygame.draw.line(self._display, self._neon_color((120, 40, 160), tick, 0.5),
-                             (w // 4, SM_Y + 14), (w * 3 // 4, SM_Y + 14), 1)
-
-            mode_btns = [
-                ("btn_multi_mode_practice",  "PRACTICE",  "1", (0, 220, 180),  (0, 55, 44)),
-                ("btn_multi_mode_challenge", "CHALLENGE", "2", (255, 190, 0),  (65, 48, 0)),
-                ("btn_multi_mode_freestyle", "FREESTYLE", "3", (200, 80, 255), (55, 14, 75)),
-            ]
-            BTN_W  = min(400, w - 40)
-            BTN_H  = 60
-            GAP    = 16
-            START_Y = SM_Y + 28
-
-            focus_list = ["btn_multi_mode_practice", "btn_multi_mode_challenge",
-                          "btn_multi_mode_freestyle", "btn_waiting_cancel"]
-            focus_idx  = self._generic_focus_idx % len(focus_list)
-
-            max_row_w = 0
-            for _, label, icon, _, _ in mode_btns:
-                _ic = self._fonts["result_big"].render(f"[{icon}]", True, (255,255,255))
-                _lb = self._fonts["result_big"].render(label, True, (255,255,255))
-                max_row_w = max(max_row_w, _ic.get_width() + 16 + _lb.get_width())
-            base_lx = w // 2 - max_row_w // 2
-
-            mouse_pos = pygame.mouse.get_pos()
-            for i, (btn_id, label, icon, col, bg_base) in enumerate(mode_btns):
-                bx = w // 2 - BTN_W // 2
-                by = START_Y + i * (BTN_H + GAP)
-                rect = pygame.Rect(bx, by, BTN_W, BTN_H)
-                self._btn_rects[btn_id] = rect
-                hover   = rect.collidepoint(mouse_pos)
-                focused = (focus_list[focus_idx] == btn_id)
-                active  = hover or focused
-
-                bg = tuple(min(255, int(c * 2.8)) for c in bg_base) if active else bg_base
-                pygame.draw.rect(self._display, bg, rect, border_radius=14)
-
-                accent_rect = pygame.Rect(bx + 4, by + 6, 6, BTN_H - 12)
-                pygame.draw.rect(self._display,
-                                 self._neon_color(col, tick) if active else tuple(c // 2 for c in col),
-                                 accent_rect, border_radius=3)
-
-                if active:
-                    self._draw_neon_rect(self._display, rect,
-                                        self._neon_color(col, tick), width=3, radius=14, glow_radius=10)
-                    self._draw_corner_brackets(self._display, rect,
-                                              self._neon_color(col, tick * 2), size=14, width=3)
-                else:
-                    pygame.draw.rect(self._display, tuple(c // 2 for c in col),
-                                     rect, 2, border_radius=14)
-
-                icon_surf = self._fonts["result_big"].render(
-                    f"[{icon}]", True,
-                    self._neon_color(col, tick) if active else tuple(min(255, c // 2 + 60) for c in col))
-                lbl_surf  = self._fonts["result_big"].render(
-                    label, True, (255, 255, 255) if active else (190, 185, 210))
-
-                cy_btn = by + BTN_H // 2
-                self._display.blit(icon_surf, icon_surf.get_rect(midleft=(base_lx, cy_btn)))
-                self._display.blit(lbl_surf,  lbl_surf.get_rect(midleft=(base_lx + icon_surf.get_width() + 16, cy_btn)))
-
-            cancel_rect = pygame.Rect(w // 2 - 120, h - 80, 240, 56)
-            self._btn_rects["btn_waiting_cancel"] = cancel_rect
-            focused_c = (focus_list[focus_idx] == "btn_waiting_cancel")
-            hover_c   = cancel_rect.collidepoint(pygame.mouse.get_pos())
-            active_c  = hover_c or focused_c
-            pygame.draw.rect(self._display, (80, 20, 20) if active_c else (30, 10, 10),
-                             cancel_rect, border_radius=10)
-            pygame.draw.rect(self._display,
-                             self._neon_color((255, 80, 80), tick) if active_c else (120, 40, 40),
-                             cancel_rect, 2 if not focused_c else 3, border_radius=10)
-            cancel_lbl = self._fonts["small_retro"].render("< CANCEL", True,
-                                                            (255, 200, 200) if active_c else (180, 120, 120))
-            self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
-            return
-
-        # ── 단계 3: CLIENT — HOST가 모드/곡 선택 중 ─────────────
-        role_col = self._neon_color((80, 200, 255), tick)
-        role_surf = self._fonts["result_big"].render("CLIENT", True, role_col)
-        self._display.blit(role_surf, role_surf.get_rect(center=(w // 2, 90)))
-
-        wait_col = self._neon_color((180, 160, 255), tick)
-        wait_surf = self._fonts["body"].render("HOST가 모드/곡을 선택 중입니다...", True, wait_col)
-        self._display.blit(wait_surf, wait_surf.get_rect(center=(w // 2, 125)))
-
-        cx, cy = w // 2, h // 2 - 10
-        r_spin = 36
-        num_dots = 10
-        for i in range(num_dots):
-            angle = math.radians(i * (360 / num_dots) + tick * 180)
-            dx = int(cx + r_spin * math.cos(angle))
-            dy = int(cy + r_spin * math.sin(angle))
-            alpha = int(60 + 195 * (i / num_dots))
-            col = (int(255 * alpha / 255), int(80 * alpha / 255), int(180 * alpha / 255))
-            pygame.draw.circle(self._display, col, (dx, dy), 5)
-
-        ip_surf = self._fonts["small_retro"].render(
-            f"연결됨: {self._multi_opponent_ip}", True, (100, 180, 120))
-        self._display.blit(ip_surf, ip_surf.get_rect(center=(w // 2, cy + 50)))
-
-        cancel_rect = pygame.Rect(w // 2 - 120, h - 80, 240, 56)
-        self._btn_rects["btn_waiting_cancel"] = cancel_rect
-        hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
-        pygame.draw.rect(self._display, (80, 20, 20) if hover else (30, 10, 10),
-                         cancel_rect, border_radius=10)
-        self._draw_neon_rect(self._display, cancel_rect,
-                             self._neon_color((255, 80, 80), tick) if hover else (120, 40, 40),
-                             width=2, radius=10, glow_radius=6)
-        cancel_lbl = self._fonts["small_retro"].render("CANCEL", True, (255, 255, 255))
-        self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
-        hint = self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100))
-        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 16)))
+        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 24)))
 
     def _render_menu(self, w, h):
         """Render the main menu — retro-fancy neon style."""
@@ -2871,17 +2715,20 @@ class GameEngine:
             pulse = 0.75 + 0.25 * math.sin(tick * 3.0)
             wait_col = tuple(int(c * pulse) for c in self._neon_color((80, 220, 255), tick))
             wait_surf = self._fonts["small_retro"].render(wait_msg, True, wait_col)
-            # 테두리만 하이라이트 (안쪽 배경 투명)
+            # 반투명 배경 패널
             pw = wait_surf.get_width() + 32
             ph = wait_surf.get_height() + 18
             px = w // 2 - pw // 2
             py = HEADER_H + body_h // 2 - ph // 2
+            panel = pygame.Surface((pw, ph), pygame.SRCALPHA)
+            panel.fill((0, 0, 0, 150))
+            self._display.blit(panel, (px, py))
             self._draw_neon_rect(self._display, pygame.Rect(px, py, pw, ph),
                                  wait_col, width=2, radius=10, glow_radius=10)
             self._display.blit(wait_surf, wait_surf.get_rect(center=(w // 2, HEADER_H + body_h // 2)))
 
         # 스킵 버튼
-        skip_rect = pygame.Rect(w - 230, HEADER_H + 6, 110, 44)
+        skip_rect = pygame.Rect(w - 220, HEADER_H + 6, 100, 36)
         self._btn_rects["btn_ready_skip"] = skip_rect
         hover_s = skip_rect.collidepoint(pygame.mouse.get_pos())
         focused_s = (getattr(self, '_generic_focus_idx', 0) == 0)
@@ -2894,7 +2741,7 @@ class GameEngine:
         self._display.blit(skip_lbl, skip_lbl.get_rect(center=skip_rect.center))
 
         # 취소 버튼
-        cancel_rect = pygame.Rect(w - 115, HEADER_H + 6, 110, 44)
+        cancel_rect = pygame.Rect(w - 110, HEADER_H + 6, 100, 36)
         self._btn_rects["btn_ready_cancel"] = cancel_rect
         hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
         focused_c = (getattr(self, '_generic_focus_idx', 0) == 1)
@@ -3061,13 +2908,16 @@ class GameEngine:
                 pygame.draw.circle(surface, (255, 255, 255), (cx, cy), max(joint_radius - 3, 2))
 
     def _render_gameplay(self, w, h):
-        """Render gameplay screen — dual panel layout.
+        """Render gameplay screen.
 
-        LEFT  : 웹캠 전체 화면 + 스켈레톤 오버레이  (파란 네온 테두리)
-        RIGHT : 레퍼런스 영상 (또는 스틱피겨)        (노란/오렌지 네온 테두리)
-        HEADER: 점수/콤보/시간/버튼
-        FOOTER: 곡 정보/조작 안내
+        일반 모드: LEFT=웹캠 + 스켈레톤, RIGHT=레퍼런스 영상
+        관전 모드: 레퍼런스 영상 전체화면 + 두 플레이어 스켈레톤 오버레이 + 점수 HUD
         """
+        # ── 관전 모드 분기 ────────────────────────────────────────
+        if self._multi_role == "spectator":
+            self._render_spectator(w, h)
+            return
+
         HEADER_H = 55
         FOOTER_H = 44          # 여유 있는 하단 영역
         BORDER   = 4          # 패널 테두리 두께
@@ -3313,6 +3163,129 @@ class GameEngine:
         # ══════════════════════════════════════════════════════
         if self._is_multi_mode and self._multi_socket:
             self._render_opponent_score_overlay(w, h, HEADER_H, fy)
+
+    def _render_spectator(self, w, h):
+        """관전 모드 렌더링.
+
+        레퍼런스 댄스 영상을 전체화면으로 표시하고
+        HOST(파란색)와 CLIENT(분홍색)의 스켈레톤, 점수를 오버레이로 표시.
+        """
+        import numpy as np
+        from pose.landmark_utils import SKELETON_CONNECTIONS, DANCE_JOINTS
+
+        sock = self._multi_socket
+        tick = self._neon_tick
+
+        # 배경
+        self._display.fill((4, 3, 14))
+
+        # ── 3-컬럼 레이아웃: HOST 스켈레톤 | 레퍼런스 영상 | CLIENT 스켈레톤 ──
+        SKEL_RATIO = 0.25  # 각 스켈레톤 패널이 화면 폭의 25%
+        skel_w = int(w * SKEL_RATIO)
+        vid_x = skel_w
+        vid_w = w - 2 * skel_w
+
+        # 스켈레톤 패널 배경 (좌/우)
+        for sx in (0, w - skel_w):
+            panel_bg = pygame.Surface((skel_w, h), pygame.SRCALPHA)
+            panel_bg.fill((10, 8, 30, 200))
+            self._display.blit(panel_bg, (sx, 0))
+
+        # 레퍼런스 영상 (중앙)
+        if self._ref_video_surf is not None:
+            vs = self._ref_video_surf
+            vw, vh = vs.get_size()
+            scale = min(vid_w / vw, h / vh)
+            dw, dh = int(vw * scale), int(vh * scale)
+            vx = vid_x + (vid_w - dw) // 2
+            vy = (h - dh) // 2
+            scaled = pygame.transform.scale(vs, (dw, dh))
+            dim = pygame.Surface((dw, dh), pygame.SRCALPHA)
+            dim.fill((0, 0, 0, 80))
+            self._display.blit(scaled, (vx, vy))
+            self._display.blit(dim, (vx, vy))
+        else:
+            lbl = self._fonts["body"].render("SPECTATING...", True, (80, 70, 110))
+            self._display.blit(lbl, lbl.get_rect(center=(w // 2, h // 2)))
+
+        # 스켈레톤: HOST=왼쪽 패널(파란색), CLIENT=오른쪽 패널(분홍색)
+        if sock is not None:
+            player_configs = [
+                (self._multi_host_ip,   "HOST",   (60, 180, 255), (180, 230, 255), (0, 0, skel_w, h)),
+                (self._multi_client_ip, "CLIENT", (255, 80, 160),  (255, 180, 220), (w - skel_w, 0, skel_w, h)),
+            ]
+            for player_ip, tag, line_col, joint_col, panel_rect in player_configs:
+                if not player_ip:
+                    continue
+                state = sock.players_state.get(player_ip)
+                if state is None:
+                    continue
+                pose = state.get("pose")
+                if pose is None:
+                    # 패널에 "대기 중" 표시
+                    px, py, pw, ph_p = panel_rect
+                    wait_lbl = self._fonts["small_retro"].render(f"{tag}", True, line_col)
+                    self._display.blit(wait_lbl, wait_lbl.get_rect(center=(px + pw // 2, h // 2 - 20)))
+                    wait_sub = self._fonts["small_retro"].render("waiting...", True, (100, 100, 130))
+                    self._display.blit(wait_sub, wait_sub.get_rect(center=(px + pw // 2, h // 2 + 10)))
+                    continue
+                try:
+                    lm = np.asarray(pose, dtype=np.float32)
+                    if lm.ndim == 1:
+                        lm = lm.reshape(-1, 4)
+                    if lm.shape != (33, 4):
+                        continue
+                except Exception:
+                    continue
+                self._draw_stick_figure(
+                    self._display, lm, panel_rect,
+                    line_color=line_col, joint_color=joint_col,
+                    line_width=4, joint_radius=7,
+                )
+
+        # 점수 HUD (상단 좌우 패널)
+        PANEL_W = max(160, w // 5)
+        PANEL_H = 90
+        PANEL_Y = 12
+        PAD = 10
+
+        player_hud = [
+            (self._multi_host_ip,   "P1 HOST",   (40, 100, 200), (60, 180, 255),  12),
+            (self._multi_client_ip, "P2 CLIENT", (150, 20, 100), (255, 80, 160), w - PANEL_W - 12),
+        ]
+        for player_ip, tag, bg_col, border_col, px in player_hud:
+            state = sock.players_state.get(player_ip) if sock else None
+            score = state["score"] if state else 0
+            combo = state["combo"] if state else 0
+            grade = state["grade"] if state else ""
+
+            bg = pygame.Surface((PANEL_W, PANEL_H), pygame.SRCALPHA)
+            bg.fill((*bg_col, 210))
+            self._display.blit(bg, (px, PANEL_Y))
+
+            border_rect = pygame.Rect(px, PANEL_Y, PANEL_W, PANEL_H)
+            self._draw_neon_rect(self._display, border_rect,
+                                 self._neon_color(border_col, tick),
+                                 width=2, radius=8, glow_radius=4)
+
+            tag_surf = self._fonts["small_retro"].render(tag, True, border_col)
+            self._display.blit(tag_surf, (px + PAD, PANEL_Y + PAD))
+
+            score_col = self._neon_color(border_col, tick)
+            score_surf = self._fonts["score"].render(
+                f"{int(score):06d}", True, score_col)
+            self._display.blit(score_surf, (px + PAD, PANEL_Y + PAD + 18))
+
+            combo_txt = f"x{combo}" if combo > 1 else ""
+            info = f"{grade}  {combo_txt}".strip()
+            if info:
+                info_surf = self._fonts["small_retro"].render(info, True, (230, 230, 255))
+                self._display.blit(info_surf, (px + PAD, PANEL_Y + PANEL_H - 22))
+
+        # 관전 뱃지 (화면 중앙 상단)
+        spec_col = self._neon_color((200, 80, 255), tick)
+        spec_lbl = self._fonts["small_retro"].render("SPECTATING", True, spec_col)
+        self._display.blit(spec_lbl, spec_lbl.get_rect(center=(w // 2, PANEL_Y + PANEL_H // 2)))
 
     def _render_opponent_score_overlay(self, w, h, header_h, footer_y):
         """게임 화면 오른쪽 하단 구석에 상대방 점수를 작은 패널로 표시.
@@ -4287,6 +4260,31 @@ class GameEngine:
         self._multi_opponent_ip = opponent_ip
         self._multi_discovery = None
 
+        if role == "spectator":
+            # SPECTATOR: host_ip,client_ip 파싱
+            parts = opponent_ip.split(",")
+            self._multi_host_ip = parts[0] if parts else ""
+            self._multi_client_ip = parts[1] if len(parts) > 1 else ""
+            from network.game_socket import GameSocket
+            sock = GameSocket(
+                opponent_ip="",   # 전송 대상 없음 (수신 전용)
+                role="spectator",
+                host_ip=self._multi_host_ip,
+                client_ip=self._multi_client_ip,
+            )
+            sock.on_disconnect = self._on_multi_disconnect
+            # 관전자도 HOST가 브로드캐스트하는 곡 정보를 수신하여 레퍼런스 영상 로드
+            sock.on_song_select = self._on_multi_song_received
+            # 관전자도 양쪽 준비 완료(GAME_START) 신호를 수신하여 영상 재생 시작
+            sock.on_game_start = self._on_multi_game_start
+            sock.start()
+            self._multi_socket = sock
+
+            self._multi_connected = True
+            self._multi_status_msg = f"관전 대기 중... (HOST={self._multi_host_ip})"
+            print(f"[MULTI] 관전 모드 대기: host={self._multi_host_ip} client={self._multi_client_ip}", flush=True)
+            return
+
         # GameSocket 생성 + 시작
         from network.game_socket import GameSocket
         sock = GameSocket(opponent_ip)
@@ -4298,6 +4296,12 @@ class GameEngine:
             # CLIENT: HOST의 곡 선택 수신 + 시작 신호 수신
             sock.on_song_select = self._on_multi_song_received
             sock.on_game_start  = self._on_multi_game_start
+        if role == "host":
+            # HOST: 연결 직후 관전자 대기용 리스너 시작
+            from network.discovery import Discovery
+            if self._multi_discovery is None:
+                self._multi_discovery = Discovery()
+            self._multi_discovery.start_host_listener(client_ip=opponent_ip)
         sock.start()
         self._multi_socket = sock
 
@@ -4320,22 +4324,37 @@ class GameEngine:
         self._multi_status_msg = msg
 
     def _on_multi_disconnect(self):
-        """게임 중 연결 끊김 — 백그라운드 스레드에서 호출."""
+        """게임 중 연결 끊김."""
         print("[MULTI] 상대방 연결 끊김", flush=True)
 
     def _on_multi_song_received(self, song_id: str, mode: str = "practice"):
-        """CLIENT: HOST가 선택한 곡+모드를 수신 — 백그라운드 스레드에서 호출."""
+        """CLIENT/SPECTATOR: HOST가 선택한 곡+모드를 수신 — 백그라운드 스레드에서 호출."""
         self._current_mode = mode
         self._multi_mode_selected = True
+        found = False
         for song in self._songs:
             if song.get("id") == song_id:
                 self._current_song = song
+                found = True
                 break
-        self._multi_found = True  # WAITING 화면 루프에서 진행 트리거
-        print(f"[MULTI] HOST 곡/모드 수신: song={song_id} mode={mode}", flush=True)
+        if not found:
+            print(f"[MULTI][WARN] HOST 곡 수신했으나 로컬에서 찾지 못함: song={song_id}", flush=True)
+            return
+        if self._multi_role == "spectator" and self.state == GameState.PLAYING:
+            # 이미 PLAYING 중인 관전자: 메인 스레드에서 에셋 재로드 예약
+            self._spectator_reload_assets = True
+            print(f"[MULTI] SPECTATOR: 곡 수신 → 에셋 재로드 예약 ({song_id})", flush=True)
+        else:
+            self._multi_found = True  # WAITING 화면 루프에서 진행 트리거
+            print(f"[MULTI] HOST 곡/모드 수신: song={song_id} mode={mode} (role={self._multi_role})", flush=True)
 
     def _on_multi_game_start(self):
-        """CLIENT: HOST의 카운트다운 시작 신호 수신 — 백그라운드 스레드에서 호출."""
+        """CLIENT/SPECTATOR: HOST의 카운트다운 시작 신호 수신 — 백그라운드 스레드에서 호출."""
+        if self._multi_role == "spectator":
+            # 관전자: GAME_START 수신 시각 기록 → 카운트다운(2초) 후 재생 시작
+            self._spectator_game_start_at = time.time()
+            print("[SPECTATOR] GAME_START 수신 → 카운트다운 후 재생 예정", flush=True)
+            return
         self._multi_game_start_received = True
         print("[MULTI] 시작 신호 수신 → COUNTDOWN", flush=True)
 
@@ -4377,6 +4396,8 @@ class GameEngine:
             self._is_multi_mode = False
             self._multi_role = ""
             self._multi_opponent_ip = ""
+            self._multi_host_ip = ""
+            self._multi_client_ip = ""
             self._multi_my_pose_ready = False
             self._multi_opponent_pose_ready = False
             self._multi_game_start_received = False
@@ -4385,6 +4406,7 @@ class GameEngine:
             self._selected_song_idx = 0
             self._song_focus_idx = 0
             self._song_depth = 1            # 곡 선택 창 진입 시 항상 depth1로 초기화
+            self._current_song = {}          # 이전 라운드 곡 초기화 (멀티플레이 곡 불일치 방지)
             self._release_reference_assets()
         elif state == GameState.READY:
             self._stop_preview()  # 미리듣기 중지
@@ -4408,6 +4430,20 @@ class GameEngine:
         elif state == GameState.PLAYING:
             # PAUSED→PLAYING 복귀인 경우에만 세션 유지
             resuming_from_pause = getattr(self, '_prev_state', None) == GameState.PAUSED
+
+            # ── 관전 모드 진입: 에셋만 로드, 영상/음악은 양쪽 준비 완료 후 시작 ──
+            if self._multi_role == "spectator":
+                if not resuming_from_pause:
+                    self._load_reference_assets()
+                    self._ref_frame_landmarks = None
+                    self._ref_video_frame = None
+                    self._spectator_playback_started = False
+                    self._spectator_game_start_at = 0.0
+                    print("[SPECTATOR] 에셋 로드 완료 — 양쪽 준비 완료 대기 중", flush=True)
+                else:
+                    pygame.mixer.music.unpause()
+                return   # 아래 일반 초기화 스킵
+
             if resuming_from_pause:
                 pygame.mixer.music.unpause()
             else:
@@ -4509,6 +4545,7 @@ class GameEngine:
             self._multi_found = False
             self._multi_timed_out = False
             self._multi_status_msg = ""
+            self._current_song = {}          # WAITING 진입 시 곡 초기화 (스테일 곡 방지)
             # 모드가 이미 선택된 경우에만 Discovery 시작 (미선택이면 모드 선택 화면 표시)
             if self._multi_mode_selected:
                 from network.discovery import Discovery
