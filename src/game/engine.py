@@ -3174,7 +3174,7 @@ class GameEngine:
             self._display.blit(tag_surf, (px + PAD, PANEL_Y + PAD))
 
             score_col = self._neon_color(border_col, tick)
-            score_surf = self._fonts["score_retro"].render(
+            score_surf = self._fonts["score"].render(
                 f"{int(score):06d}", True, score_col)
             self._display.blit(score_surf, (px + PAD, PANEL_Y + PAD + 18))
 
