@@ -5,8 +5,7 @@
   "difficulty": 1,
   "duration": 105,
   "mode": [
-    "practice",
-    "challenge"
+    "practice"
   ],
   "video": "data/reference_dances/gukmin_exercise/video.mp4",
   "video_fps": 24,
