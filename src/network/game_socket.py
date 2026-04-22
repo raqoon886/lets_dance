@@ -166,6 +166,12 @@ class GameSocket:
                         p["grade"] = str(msg.get("grade", ""))
                     elif mtype == MSG_SKELETON_UPDATE:
                         p["pose"] = msg.get("pose")
+                # MSG_SONG_SELECT는 발신자 무관하게 처리 (관전자도 곡 정보 수신 필요)
+                if mtype == MSG_SONG_SELECT:
+                    song_id = str(msg.get("song_id", ""))
+                    mode    = str(msg.get("mode", "practice"))
+                    if song_id and self.on_song_select:
+                        self.on_song_select(song_id, mode)
                 continue
 
             if sender_ip != self.opponent_ip:

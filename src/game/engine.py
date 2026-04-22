@@ -176,6 +176,7 @@ class GameEngine:
         self._multi_opponent_pose_ready: bool = False  # 상대방 포즈 감지 3초 완료
         self._multi_mode_selected: bool = False        # 모드 선택 완료 여부
         self._multi_connected: bool = False            # Discovery 성공, 연결된 상태
+        self._spectator_reload_assets: bool = False    # 관전자: 곡 수신 후 에셋 재로드 신호
 
     def initialize(self):
         """
@@ -1638,6 +1639,14 @@ class GameEngine:
 
         # 관전 모드에서는 카메라/추론 루프 완전 우회
         if self._multi_role == "spectator":
+            # 관전자 곡 수신 후 레퍼런스 에셋 로드 (메인 스레드에서 안전하게 1회 처리)
+            if self._spectator_reload_assets:
+                self._spectator_reload_assets = False
+                self._ref_landmarks = None  # 이전 곡 캐시 초기화 → 재로드 강제
+                self._load_reference_assets()
+                if getattr(self, '_async_video_player', None) is not None:
+                    self._async_video_player.reset_position()
+                    self._async_video_player.start()
             # 레퍼런스 영상 프레임만 업데이트 (섹션 없이도 동작)
             if getattr(self, '_async_video_player', None) is not None:
                 vframe_rgb, vframe_seq = self._async_video_player.get_latest_frame_with_seq()
@@ -4237,12 +4246,22 @@ class GameEngine:
         """CLIENT/SPECTATOR: HOST가 선택한 곡+모드를 수신 — 백그라운드 스레드에서 호출."""
         self._current_mode = mode
         self._multi_mode_selected = True
+        found = False
         for song in self._songs:
             if song.get("id") == song_id:
                 self._current_song = song
+                found = True
                 break
-        self._multi_found = True  # WAITING 화면 루프에서 진행 트리거
-        print(f"[MULTI] HOST 곡/모드 수신: song={song_id} mode={mode} (role={self._multi_role})", flush=True)
+        if not found:
+            print(f"[MULTI][WARN] HOST 곡 수신했으나 로컬에서 찾지 못함: song={song_id}", flush=True)
+            return
+        if self._multi_role == "spectator" and self.state == GameState.PLAYING:
+            # 이미 PLAYING 중인 관전자: 메인 스레드에서 에셋 재로드 예약
+            self._spectator_reload_assets = True
+            print(f"[MULTI] SPECTATOR: 곡 수신 → 에셋 재로드 예약 ({song_id})", flush=True)
+        else:
+            self._multi_found = True  # WAITING 화면 루프에서 진행 트리거
+            print(f"[MULTI] HOST 곡/모드 수신: song={song_id} mode={mode} (role={self._multi_role})", flush=True)
 
     def _on_multi_game_start(self):
         """CLIENT: HOST의 카운트다운 시작 신호 수신 — 백그라운드 스레드에서 호출."""
