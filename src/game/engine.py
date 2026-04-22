@@ -1715,8 +1715,14 @@ class GameEngine:
                 if should_start:
                     self._spectator_playback_started = True
                     if getattr(self, '_async_video_player', None) is not None:
-                        self._async_video_player.reset_position()
-                        self._async_video_player.start()
+                        if getattr(self._async_video_player, 'cap', None) is not None:
+                            self._async_video_player.reset_position()
+                            self._async_video_player.start()
+                        else:
+                            # cap이 해제된 경우 에셋 재로드
+                            self._load_reference_assets()
+                            if getattr(self, '_async_video_player', None) is not None:
+                                self._async_video_player.start()
                     if getattr(self, '_audio_path', None) and os.path.exists(self._audio_path):
                         try:
                             pygame.mixer.music.play()
@@ -4481,7 +4487,8 @@ class GameEngine:
                     }
             # retry 시 영상/음악 리셋 (에셋은 이미 로드됨)
             if getattr(self, '_async_video_player', None) is not None:
-                self._async_video_player.reset_position()
+                if getattr(self._async_video_player, 'cap', None) is not None:
+                    self._async_video_player.reset_position()
             print("[SPECTATOR] GAME_START 수신 → 카운트다운 후 재생 예정", flush=True)
             return
         self._multi_game_start_received = True
@@ -4505,11 +4512,9 @@ class GameEngine:
         if host_done and client_done:
             self._spectator_result_active = True
             self._spectator_result_start = time.time()
-            # 영상/음악 정지
+            # 영상/음악 정지 (플레이어는 해제하지 않음 — retry 시 재사용)
             if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
                 pygame.mixer.music.stop()
-            if getattr(self, '_async_video_player', None) is not None:
-                self._async_video_player.stop()
             print("[SPECTATOR] 양쪽 모두 종료 → 결과 화면 표시", flush=True)
 
     def transition_to(self, new_state: str):
