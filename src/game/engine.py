@@ -857,7 +857,11 @@ class GameEngine:
             elif self.state == GameState.PAUSED:
                 self.transition_to(GameState.PLAYING)
             elif self.state in (GameState.PLAYING,):
-                self.transition_to(GameState.PAUSED)
+                if self._multi_role == "spectator":
+                    # 관전 모드에서는 즉시 메뉴로
+                    self.transition_to(GameState.MENU)
+                else:
+                    self.transition_to(GameState.PAUSED)
             elif self.state == GameState.RESULT:
                 if self._name_input_active:
                     # 이름 입력 오버레이 활성 중: ESC = 이전 이름으로 저장
@@ -1834,18 +1838,20 @@ class GameEngine:
 
     def _update_waiting(self):
         """WAITING 상태 처리 — HOST는 연결 후 모드/곡 선택, CLIENT는 곡 수신 후 READY 이동,
-        SPECTATOR는 연결 후 바로 PLAYING(관전) 진입."""
+        SPECTATOR는 곡 수신 후 PLAYING(관전) 진입."""
         if self._multi_found:
-            self._multi_found = False
-            if self._multi_role == "host":
-                # HOST: _multi_connected=True → 렌더링에서 모드 선택 UI 표시
-                pass
-            elif self._multi_role == "spectator":
-                # SPECTATOR: 관전 모드로 PLAYING 진입
-                self.transition_to(GameState.PLAYING)
-            else:
-                # CLIENT: 곡을 수신했으면 READY로, 아직이면 계속 대기
+            if self._multi_role == "spectator":
+                # SPECTATOR: 곡 정보가 도착했을 때만 PLAYING 진입
                 if self._current_song:
+                    self._multi_found = False
+                    self.transition_to(GameState.PLAYING)
+            elif self._multi_role == "host":
+                # HOST: _multi_connected=True → 렌더링에서 모드 선택 UI 표시
+                self._multi_found = False
+            else:
+                # CLIENT: 곡을 수신했으면 READY로
+                if self._current_song:
+                    self._multi_found = False
                     self.transition_to(GameState.READY)
 
     def _render(self):
@@ -4180,10 +4186,9 @@ class GameEngine:
             sock.start()
             self._multi_socket = sock
 
-            self._multi_found = True
             self._multi_connected = True
-            self._multi_status_msg = f"관전 모드! HOST={self._multi_host_ip}"
-            print(f"[MULTI] 관전 모드 진입: host={self._multi_host_ip} client={self._multi_client_ip}", flush=True)
+            self._multi_status_msg = f"관전 대기 중... (HOST={self._multi_host_ip})"
+            print(f"[MULTI] 관전 모드 대기: host={self._multi_host_ip} client={self._multi_client_ip}", flush=True)
             return
 
         # GameSocket 생성 + 시작

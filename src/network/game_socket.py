@@ -154,9 +154,10 @@ class GameSocket:
 
             msg = parse_msg(data)
             mtype = msg.get("type")
-            sender_ip = addr[0]
+            sender_ip = addr[0].strip()
 
             if self.role == "spectator":
+                # Check if this IP is one of our tracked players
                 if sender_ip in self.players_state:
                     p = self.players_state[sender_ip]
                     if mtype == MSG_SCORE_UPDATE:
