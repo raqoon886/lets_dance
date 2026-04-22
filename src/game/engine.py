@@ -2009,7 +2009,7 @@ class GameEngine:
             msg_surf = self._fonts["body"].render(msg, True, msg_col)
             self._display.blit(msg_surf, msg_surf.get_rect(center=(w // 2, cy + 50)))
 
-            cancel_rect = pygame.Rect(w // 2 - 100, h // 2 + 100, 200, 44)
+            cancel_rect = pygame.Rect(w // 2 - 100, h - 120, 200, 44)
             self._btn_rects["btn_waiting_cancel"] = cancel_rect
             hover = cancel_rect.collidepoint(pygame.mouse.get_pos())
             pygame.draw.rect(self._display, (80, 20, 20) if hover else (30, 10, 10),
@@ -2021,7 +2021,7 @@ class GameEngine:
             self._display.blit(cancel_lbl, cancel_lbl.get_rect(center=cancel_rect.center))
             self._display.blit(
                 self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100)),
-                self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100)).get_rect(center=(w // 2, h - 24))
+                self._fonts["small_retro"].render("ESC: CANCEL", True, (80, 70, 100)).get_rect(center=(w // 2, cancel_rect.bottom + 20))
             )
             return
 
@@ -2772,7 +2772,7 @@ class GameEngine:
         self._display.blit(sub, sub.get_rect(center=(w // 2, h // 2 + 100)))
 
         # 취소 버튼 (방향키/Enter 접근 가능)
-        cancel_rect = pygame.Rect(w // 2 - 100, h - 80, 200, 48)
+        cancel_rect = pygame.Rect(w // 2 - 100, h - 110, 200, 48)
         self._btn_rects["btn_countdown_cancel"] = cancel_rect
         hover   = cancel_rect.collidepoint(pygame.mouse.get_pos())
         focused = (getattr(self, '_generic_focus_idx', 0) == 0)
@@ -2785,7 +2785,7 @@ class GameEngine:
         self._display.blit(lbl, lbl.get_rect(center=cancel_rect.center))
 
         hint = self._fonts["small_retro"].render("ESC: CANCEL  |  ENTER: CANCEL", True, (100, 90, 130))
-        self._display.blit(hint, hint.get_rect(center=(w // 2, h - 36)))
+        self._display.blit(hint, hint.get_rect(center=(w // 2, cancel_rect.bottom + 20)))
 
     # ──────────────────────────────────────────────────────────
     #  공통 UI 헬퍼
@@ -3581,7 +3581,7 @@ class GameEngine:
             pygame.draw.rect(self._display, rec_color, rec_rect, border_radius=14)
             rec_border  = (255, 255, 100) if rec_focused else (0, 200, 255) if rec_saved else (255, 180, 60)
             pygame.draw.rect(self._display, rec_border, rec_rect, 3 if rec_focused else 2, border_radius=14)
-            rec_label   = f"✓ {self._player_name[:8]}" if rec_saved else "RECORD"
+            rec_label   = f"{self._player_name[:8]}" if rec_saved else "RECORD"
             rec_lbl = self._fonts["btn_retro"].render(rec_label, True, (255, 255, 255))
             self._display.blit(rec_lbl, rec_lbl.get_rect(center=rec_rect.center))
             # 나머지 3개 버튼 시작 x (RECORD 다음부터)
