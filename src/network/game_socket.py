@@ -60,6 +60,7 @@ class GameSocket:
         self.on_song_select = None         # (song_id: str, mode: str)
         self.on_game_start  = None         # () — CLIENT가 HOST의 시작 신호 수신 시
         self.on_opponent_pose_ready = None # () — 상대방 포즈 감지 3초 완료 알림
+        self.on_game_end = None            # (sender_ip: str, final_score: int) — 관전자용
 
     # ─── public API ──────────────────────────────────────────────────────────
 
@@ -191,6 +192,14 @@ class GameSocket:
                 elif mtype == MSG_GAME_START:
                     if self.on_game_start:
                         self.on_game_start()
+                # MSG_GAME_END: 플레이어 게임 종료 → 관전자 결과 표시
+                elif mtype == MSG_GAME_END:
+                    final_score = int(msg.get("final_score", 0))
+                    if sender_ip in self.players_state:
+                        self.players_state[sender_ip]["final_score"] = final_score
+                        self.players_state[sender_ip]["finished"] = True
+                    if self.on_game_end:
+                        self.on_game_end(sender_ip, final_score)
                 continue
 
             if sender_ip != self.opponent_ip:

@@ -181,6 +181,8 @@ class GameEngine:
         self._spectator_game_start_at: float = 0.0    # 관전자: GAME_START 수신 시각
         self._spectator_playback_started: bool = False # 관전자: 영상/음악 재생 시작 여부
         self._spectator_countdown_active: bool = False # 관전자: 카운트다운 표시 중
+        self._spectator_result_active: bool = False    # 관전자: 결과 화면 표시 중
+        self._spectator_result_start: float = 0.0      # 관전자: 결과 표시 시작 시각
 
     def initialize(self):
         """
@@ -1671,15 +1673,17 @@ class GameEngine:
                 self._spectator_playback_started = False
                 self._spectator_game_start_at = 0.0
                 self._spectator_countdown_active = False
+                self._spectator_result_active = False
                 # 이전 곡의 영상/음악 정지 및 에셋 해제
                 if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
                     pygame.mixer.music.stop()
                 self._release_reference_assets()
-                # players_state 초기화 (이전 판 점수/스켈레톤 잔상 제거)
+                # players_state 초기화 (이전 판 점수/스켈레톤/종료 플래그 잔상 제거)
                 if self._multi_socket is not None:
                     for ip in self._multi_socket.players_state:
                         self._multi_socket.players_state[ip] = {
-                            "score": 0, "combo": 0, "grade": "", "pose": None
+                            "score": 0, "combo": 0, "grade": "", "pose": None,
+                            "finished": False, "final_score": 0
                         }
                 self._load_reference_assets()
                 print("[SPECTATOR] 새 라운드 에셋 재로드 완료", flush=True)
@@ -3328,6 +3332,49 @@ class GameEngine:
                 sub = self._fonts["result_big"].render("GET READY!", True, (180, 180, 220))
                 self._display.blit(sub, sub.get_rect(center=(w // 2, h // 2 + 100)))
 
+        # ── 결과 오버레이 (양쪽 게임 종료 시) ──
+        if self._spectator_result_active:
+            import math
+            overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 200))
+            self._display.blit(overlay, (0, 0))
+
+            sock = self._multi_socket
+            host_state = sock.players_state.get(self._multi_host_ip, {}) if sock else {}
+            client_state = sock.players_state.get(self._multi_client_ip, {}) if sock else {}
+            host_score = host_state.get("final_score", host_state.get("score", 0))
+            client_score = client_state.get("final_score", client_state.get("score", 0))
+
+            # 승부 결과
+            if host_score > client_score:
+                vs_txt, vs_col = "HOST WIN!", (60, 180, 255)
+            elif host_score < client_score:
+                vs_txt, vs_col = "CLIENT WIN!", (255, 80, 160)
+            else:
+                vs_txt, vs_col = "DRAW!", (255, 220, 0)
+
+            pulse = 1.0 + 0.04 * math.sin(tick * 4)
+            vs_surf = self._fonts["feedback"].render(vs_txt, True, self._neon_color(vs_col, tick))
+            vs_scaled = pygame.transform.smoothscale(vs_surf, (
+                int(vs_surf.get_width() * pulse),
+                int(vs_surf.get_height() * pulse),
+            ))
+            self._display.blit(vs_scaled, vs_scaled.get_rect(center=(w // 2, h // 3)))
+
+            # 점수 표시
+            score_y = h // 2 + 10
+            host_lbl = self._fonts["result_big"].render(
+                f"HOST:  {int(host_score):,}", True, (60, 180, 255))
+            self._display.blit(host_lbl, host_lbl.get_rect(center=(w // 2, score_y)))
+            client_lbl = self._fonts["result_big"].render(
+                f"CLIENT:  {int(client_score):,}", True, (255, 80, 160))
+            self._display.blit(client_lbl, client_lbl.get_rect(center=(w // 2, score_y + 50)))
+
+            # 안내 문구
+            wait_lbl = self._fonts["small_retro"].render(
+                "Waiting for next round...", True, (140, 140, 170))
+            self._display.blit(wait_lbl, wait_lbl.get_rect(center=(w // 2, h - 60)))
+
     def _render_opponent_score_overlay(self, w, h, header_h, footer_y):
         """게임 화면 오른쪽 하단 구석에 상대방 점수를 작은 패널로 표시.
 
@@ -4344,6 +4391,8 @@ class GameEngine:
             sock.on_song_select = self._on_multi_song_received
             # 관전자도 양쪽 준비 완료(GAME_START) 신호를 수신하여 영상 재생 시작
             sock.on_game_start = self._on_multi_game_start
+            # 관전자: 플레이어 게임 종료(MSG_GAME_END) 수신
+            sock.on_game_end = self._on_spectator_game_end
             sock.start()
             self._multi_socket = sock
 
@@ -4430,6 +4479,26 @@ class GameEngine:
         self._multi_opponent_pose_ready = True
         print(f"[MULTI] 상대방 포즈 준비 완료 ({self._multi_role})", flush=True)
 
+    def _on_spectator_game_end(self, sender_ip: str, final_score: int):
+        """관전자: 플레이어 게임 종료 수신 — 백그라운드 스레드에서 호출."""
+        sock = self._multi_socket
+        if sock is None:
+            return
+        # 양쪽 모두 종료했는지 확인
+        host_done = sock.players_state.get(self._multi_host_ip, {}).get("finished", False)
+        client_done = sock.players_state.get(self._multi_client_ip, {}).get("finished", False)
+        print(f"[SPECTATOR] GAME_END 수신: sender={sender_ip} score={final_score} "
+              f"host_done={host_done} client_done={client_done}", flush=True)
+        if host_done and client_done:
+            self._spectator_result_active = True
+            self._spectator_result_start = time.time()
+            # 영상/음악 정지
+            if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
+                pygame.mixer.music.stop()
+            if getattr(self, '_async_video_player', None) is not None:
+                self._async_video_player.stop()
+            print("[SPECTATOR] 양쪽 모두 종료 → 결과 화면 표시", flush=True)
+
     def transition_to(self, new_state: str):
         """Transition to a new game state."""
         old_state = self.state
@@ -4483,6 +4552,10 @@ class GameEngine:
             self._ready_pose_detected = False
             self._ready_full_body_start = 0.0
             self._ready_countdown = 0.0
+            # 멀티플레이: 이전 라운드의 스테일 레디 플래그 제거
+            self._multi_my_pose_ready = False
+            self._multi_opponent_pose_ready = False
+            self._multi_game_start_received = False
             # READY에서 곡 선택이 아직 안 된 경우 첫 번째 곡 자동 선택
             if not self._current_song:
                 songs = self._songs_for_mode(self._current_mode)
@@ -4507,6 +4580,7 @@ class GameEngine:
                     self._spectator_playback_started = False
                     self._spectator_game_start_at = 0.0
                     self._spectator_countdown_active = False
+                    self._spectator_result_active = False
                     print("[SPECTATOR] 에셋 로드 완료 — 양쪽 준비 완료 대기 중", flush=True)
                 else:
                     pygame.mixer.music.unpause()
