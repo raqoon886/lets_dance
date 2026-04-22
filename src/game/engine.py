@@ -4888,7 +4888,7 @@ class GameEngine:
 
     def _load_reference_assets(self):
         """PLAYING 진입 시의 초기 렉을 없애기 위해 미리 무거운 리소스(영상, Numpy 배열 등)를 로드해둡니다."""
-        if getattr(self, '_ref_landmarks', None) is not None:
+        if getattr(self, '_ref_landmarks', None) is not None and getattr(self, '_audio_path', None) is not None:
             return  # 이미 로드됨
             
         import subprocess
@@ -5025,21 +5025,21 @@ class GameEngine:
                 else:
                     print(f"[WARN] 레퍼런스 영상 찾을 수 없음: {video_path}")
 
-            # 영상 없이 오디오만 있는 경우 (프리스타일 음악 전용)
-            if not video_rel or not os.path.exists(video_path if video_rel else ""):
-                audio_rel = self._current_song.get("audio", "")
-                if audio_rel:
-                    project_root = os.path.dirname(os.path.dirname(
-                        os.path.dirname(os.path.abspath(__file__))))
-                    audio_path = os.path.join(project_root, audio_rel)
-                    if not os.path.exists(audio_path):
-                        audio_path = os.path.join(os.getcwd(), audio_rel)
-                    if os.path.exists(audio_path):
-                        self._audio_path = audio_path
-                        try:
-                            pygame.mixer.music.load(audio_path)
-                        except Exception:
-                            pass
+        # 영상 없이 오디오만 있는 경우 (프리스타일 음악 전용) — has_reference 여부와 무관하게 실행
+        if self._current_song and not getattr(self, '_audio_path', None):
+            audio_rel = self._current_song.get("audio", "")
+            if audio_rel:
+                project_root = os.path.dirname(os.path.dirname(
+                    os.path.dirname(os.path.abspath(__file__))))
+                audio_path = os.path.join(project_root, audio_rel)
+                if not os.path.exists(audio_path):
+                    audio_path = os.path.join(os.getcwd(), audio_rel)
+                if os.path.exists(audio_path):
+                    self._audio_path = audio_path
+                    try:
+                        pygame.mixer.music.load(audio_path)
+                    except Exception:
+                        pass
 
     def shutdown(self):
         """Clean up all resources. 중복 호출에도 안전합니다."""
