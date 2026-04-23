@@ -179,6 +179,7 @@ class GameEngine:
         self._spectator_reload_assets: bool = False    # 관전자: 곡 수신 후 에셋 재로드 신호
         self._spectator_start_playback: bool = False   # 관전자: 양쪽 준비 완료 후 재생 시작 신호
         self._spectator_game_start_at: float = 0.0    # 관전자: GAME_START 수신 시각
+        self._spectator_game_start_pending: bool = False  # 리로드 대기 중 GAME_START 도착 여부
         self._spectator_playback_started: bool = False # 관전자: 영상/음악 재생 시작 여부
         self._spectator_countdown_active: bool = False # 관전자: 카운트다운 표시 중
         self._spectator_result_active: bool = False    # 관전자: 결과 화면 표시 중
@@ -1674,9 +1675,13 @@ class GameEngine:
             if self._spectator_reload_assets:
                 self._spectator_reload_assets = False
                 self._spectator_playback_started = False
-                self._spectator_game_start_at = 0.0
                 self._spectator_countdown_active = False
                 self._spectator_result_active = False
+                # GAME_START가 리로드 대기 중 도착했으면 game_start_at 보존
+                if getattr(self, '_spectator_game_start_pending', False):
+                    self._spectator_game_start_pending = False
+                else:
+                    self._spectator_game_start_at = 0.0
                 # 이전 곡의 영상/음악 정지 및 에셋 해제
                 if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
                     pygame.mixer.music.stop()
@@ -1731,6 +1736,21 @@ class GameEngine:
                             pygame.mixer.music.play()
                         except Exception as e:
                             print(f"[WARN] 관전 오디오 재생 실패: {e}")
+
+            # 결과 화면 fallback — 콜백 기반 감지 보완 (메인 스레드에서 매 프레임 확인)
+            if (not self._spectator_result_active
+                    and self._spectator_playback_started
+                    and self._multi_socket is not None):
+                all_done = all(
+                    ps.get("finished", False)
+                    for ps in self._multi_socket.players_state.values()
+                )
+                if all_done and len(self._multi_socket.players_state) >= 2:
+                    self._spectator_result_active = True
+                    self._spectator_result_start = time.time()
+                    if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
+                        pygame.mixer.music.stop()
+                    print("[SPECTATOR] 결과 감지 (fallback) → 결과 화면 표시", flush=True)
 
             # 레퍼런스 영상 프레임만 업데이트 (섹션 없이도 동작)
             if getattr(self, '_async_video_player', None) is not None:
@@ -4481,6 +4501,10 @@ class GameEngine:
             self._spectator_result_active = False   # 결과 화면 닫기 (retry 시)
             self._spectator_playback_started = False
             self._spectator_countdown_active = False
+            # 에셋 리로드가 아직 처리 안 됐으면 game_start가 리로드에 의해
+            # 덮어쓰이지 않도록 플래그 설정
+            if self._spectator_reload_assets:
+                self._spectator_game_start_pending = True
             # retry(같은 곡) 시 players_state 초기화
             if self._multi_socket is not None:
                 for ip in self._multi_socket.players_state:
