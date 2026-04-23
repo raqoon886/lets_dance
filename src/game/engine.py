@@ -1340,6 +1340,9 @@ class GameEngine:
                 and self.state not in (GameState.WAITING, GameState.PLAYING, GameState.COUNTDOWN)):
             self._multi_found = False
             if self._current_song:
+                # 이전 라운드 에셋 해제 — RESULT→READY 직행 시 _load_reference_assets()의
+                # early-return 조건(이미 로드됨)에 걸려 새 곡 에셋이 로드되지 않는 문제 방지
+                self._release_reference_assets()
                 print(f"[MULTI] CLIENT: 새 곡 수신 → READY ({self._current_song.get('id')})", flush=True)
                 self.transition_to(GameState.READY)
 
